@@ -290,14 +290,16 @@ public struct QuestionAnswer: Codable, Sendable {
 **需回传类（`approval` / `question`，阻塞）：**
 1. 工具触发 hook → `VibePetHooks` 从 stdin 读到工具原生事件 JSON。
 2. CLI 经对应 `ToolAdapter` 归一化为 `BridgeEnvelope`（`content` 为 `.approval` 或 `.question`）。
-3. CLI 连 socket 发送，**保持连接，等待** `BridgeResponseEnvelope`（超时默认 20s，可配）。
+3. CLI 连 socket 发送，**保持连接，等待** `BridgeResponseEnvelope`（用户响应倒计时默认 20s，可配，且必须小于对应工具 hook timeout）。
 4. App `BridgeServer` 收到 → `PetController` 进入 `.decide` 态 → 弹对应气泡（允许/拒绝 或 多选题）。
 5. 用户操作 → App 经同一连接回传 `BridgeResponseEnvelope`。
 6. CLI 收到 → 经 `ToolAdapter` 转成该工具期望的 stdout JSON → `exit 0`。
 7. 工具据此放行 / 取消 / 拿到已填答案继续。
 
 **Fail-open（关键）：**
-- 连接不上（App 未运行）、或超时未收到回传 → CLI 输出 `defer`（Claude Code：无 JSON 的 `exit 0`；Codex：decline 决策），让工具回退**原生流程**，绝不卡住开发者。
+- App 未运行 / socket 连接失败 / socket 损坏：CLI 在 ≤ 2s 内输出 `defer`（Claude Code：无 JSON 的 `exit 0`；Codex：decline 决策），让工具回退**原生流程**，绝不卡住开发者。
+- App 已连接但用户未响应：按配置的决策倒计时（默认 20s）等待；到点输出 `defer`。此时不要求 ≤ 2s，因为 20s 是用户可见的响应窗口。
+- 所有工具侧 hook timeout 必须大于 VibePet 倒计时 + 1s 缓冲；若检测到配置不满足，安装器/设置页提示并拒绝写入该超时组合。
 
 **通知类（`completion` / `status`，非阻塞）：**
 - CLI 发送 envelope 后立即 `exit 0`；App 收到后弹无按钮气泡，数秒自动收起。
@@ -326,14 +328,14 @@ public protocol ToolAdapter: Sendable {
 |---|---|---|
 | `PreToolUse`（`tool_name` ≠ AskUserQuestion） | `.approval` | 从 `tool_input` 组装 `ActionPreview`：`Bash`→`.command`、`Edit/Write`→`.fileChange`、`Read`→`.fileRead`、`WebFetch`→`.network`；`alwaysAllow` 用 `tool_name` 填充。 |
 | `PreToolUse`（`tool_name` = `AskUserQuestion`） | `.question` | 从 `tool_input.questions` 映射 `QuestionItem`/`QuestionOption`（header/options/multiSelect/freeform）。 |
-| `Stop` | `.completion` | summary 作 Markdown。 |
+| `Stop` | `.completion` | 优先从 payload 提取 summary / transcript 摘要；缺失时使用兜底文案，不假设事件一定携带 Markdown。 |
 | `Notification` | `.status` | 单行提醒。 |
 
 **回写（`BridgeResponse` → stdout JSON, `exit 0`）**：
 - `approval.deny` → `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"<原因>"}}`。`deny` 任何权限模式下都生效，可靠。
 - `approval.allowOnce` → `permissionDecision:"allow"`。**注意**：特定版本存在 `allow` 不抑制原生弹窗的已知 bug，作尽力而为。
-- `approval.allowAlways` → `allow` + 写入会话/持久权限规则（`scopeHint`=tool_name）。*持久化规则的确切 Claude Code 落地方式待实现期验证；MVP 至少保证本会话生效。*
-- `question` → **关键机制**：返回 `permissionDecision:"allow"` 且带 `updatedInput`，把用户答案预填进 AskUserQuestion 的 `answers`/`annotations` 字段 → 工具拿到已填输入，**不再弹原生提问**（纯 hook，无需注入按键）。
+- `approval.allowAlways` → `allow` + 写入会话/持久权限规则（`scopeHint`=tool_name）。该能力必须先经 schema spike 验证；未验证通过时 adapter 不生成 `alwaysAllow`，UI 不显示"始终允许"。
+- `question` → **关键机制**：返回 `permissionDecision:"allow"` 且带 `updatedInput`，把用户答案预填进 AskUserQuestion 的 `answers`/`annotations` 字段 → 工具拿到已填输入，**不再弹原生提问**（纯 hook，无需注入按键）。该 schema 必须以当前 Claude Code 官方事件样例/本机实测样例固化为 fixture；未验证通过时降级为 `.status` 提醒 + 回终端处理。
 - `defer` → 不输出 JSON，`exit 0`，回退原生流程。
 - **注册位置**：`~/.claude/settings.json` 的 `hooks.PreToolUse` / `hooks.Stop` / `hooks.Notification`，command 指向稳定拷贝路径 `~/Library/Application Support/VibePet/bin/VibePetHooks`（见 §1.2，不引用 `.app` 包内路径）。
 
@@ -354,6 +356,11 @@ public protocol ToolAdapter: Sendable {
 
 > Codex 限制：`notify` 仅 `agent-turn-complete`，且 hook 不支持回填答案。故 Codex 的**审批与完成通知**可用，**结构化提问降级**为通知 + 跳回终端。Claude Code 则四态齐全。
 
+**Codex hook trust / 并发约束（MVP 必须显式处理）**：
+- Codex 非 managed command hook 可能需要用户在 `/hooks` 中 review/trust 后才会运行。VibePetSetup 只能完成"写入配置"，不能把"已写入"等同于"已生效"。
+- 安装态分三类：`notInstalled`、`installedNeedsTrust`、`trustedActive`。无法自动读取 trust 状态时，设置页显示"已写入，需在 Codex /hooks 确认"，并把首次真实收到 Codex hook 事件作为 `trustedActive` 的运行时证据。
+- Codex 会加载多个来源的匹配 hook，且同一事件的多个 command hook 可能并发启动。VibePet 不假设自己独占审批流；所有回写必须幂等，`requestId` 仅用于 VibePet 自身配对，不作为全局锁。
+
 ### 4.3 安装器与 manifest（VibePetSetup）
 
 安装器对每个工具提供对称的三件套：`install` / `uninstall` / `status`（可由 CLI 子命令或 App 设置页按钮触发）。幂等与精确卸载靠一份 **manifest** 驱动，而非靠字符串猜测哪条配置是自己写的。
@@ -371,6 +378,7 @@ public protocol ToolAdapter: Sendable {
   "tools": {
     "claudeCode": {
       "installed": true,
+      "activationState": "trustedActive",
       "settingsPath": "~/.claude/settings.json",
       "writtenHooks": ["PreToolUse", "Stop", "Notification"],  // 仅记 VibePet 写入的
       "backupPath": "backups/settings.json.2026-06-17T...bak"
@@ -380,9 +388,9 @@ public protocol ToolAdapter: Sendable {
 }
 ```
 
-- **install（幂等）**：检测工具配置存在性 → 写前展示将改动的文件/二进制/备份并经 App 确认（见 US-0/US-5）→ 备份原配置 → 拷贝/升级 `bin/VibePetHooks` → 把 hook 条目写入工具配置（command 指向稳定路径，§1.2）→ 写 manifest。已安装则跳过重复写入；二进制版本落后则仅重拷。
+- **install（幂等）**：检测工具配置存在性 → 写前展示将改动的文件/二进制/备份并经 App 确认（见 US-0/US-5）→ 备份原配置 → 拷贝/升级 `bin/VibePetHooks` → 把 hook 条目写入工具配置（command 指向稳定路径，§1.2）→ 写 manifest。已安装则跳过重复写入；二进制版本落后则仅重拷。Codex 写入后默认进入 `installedNeedsTrust`，直到用户完成 `/hooks` trust 或 VibePet 收到真实 Codex hook 事件后再标记为 `trustedActive`。
 - **uninstall（精确）**：读 manifest，只移除其中 `writtenHooks` 记录的条目，**保留用户其它 hooks**；删 `bin/VibePetHooks` 与 manifest 对应项。
-- **status**：读 manifest + 校验二进制版本，返回每个工具 `已安装 / 未安装 / 版本落后`，供 CLI 与设置页展示。
+- **status**：读 manifest + 校验二进制版本 + 激活状态，返回每个工具 `未安装 / 已写入待信任 / 已启用 / 版本落后`，供 CLI 与设置页展示。
 - **不覆盖用户自定义**：写入前若目标 hook 键已存在用户自己的非 VibePet 条目，则追加而不覆盖。
 - **检测不到工具**：onboarding/设置页显示可读提示并允许跳过；hooks 非宠物陪伴的前置依赖。
 
@@ -491,7 +499,7 @@ public protocol ToolAdapter: Sendable {
 - 倒计时默认 20s（可配），到点 CLI fail-open 返回 `defer`，气泡更新为"⏰ 已超时，已交回原生审批"并 2s 后淡出。
 - **拒绝**（`esc`）→ `deny`，可选展开"原因"输入框作 `permissionDecisionReason` 回传。
 - **允许一次**（`⌘↩`）→ `allowOnce`。
-- **始终允许**（仅当 `alwaysAllow != nil`）→ `allowAlways(scopeHint)`。
+- **始终允许**（仅当 `alwaysAllow != nil` 且 schema spike 已验证）→ `allowAlways(scopeHint)`；未验证通过时不显示该按钮。
 - `requiresTerminalApproval=true` 时（如 Codex 的部分场景）：不显示允许/拒绝，改为单个**"回终端处理"**按钮 + 提示文案（MVP 仅聚焦/复制提示，真正跳转留 v1.1）。
 
 #### 5.3.4 提问气泡（question card）
@@ -512,7 +520,7 @@ public protocol ToolAdapter: Sendable {
 
 - 单选用单选圈、`multiSelect=true` 用复选框；选项展示 `label` + 次行灰字 `detail`。
 - `allowsFreeform=true` 的选项选中后展开文本框。
-- 提交（`⌘↩`）→ 回传 `QuestionAnswer`（`answers`/`freeform` 按 `header` 归集）；adapter 经 `updatedInput` 预填回 AskUserQuestion（见 §4.1）。
+- 提交（`⌘↩`）→ 回传 `QuestionAnswer`（`answers`/`freeform` 按 `header` 归集）；schema spike 通过时 adapter 经 `updatedInput` 预填回 AskUserQuestion（见 §4.1），未通过时降级为提醒 + 回终端处理。
 - 倒计时到点同样 fail-open `defer`（回退工具原生提问）。
 - **Codex 无此卡**：其提问降级为审批卡的 `requiresTerminalApproval` 形态（见 §4.2）。
 
@@ -581,10 +589,13 @@ VibePet/
 |---|---|
 | 抠图无主体/失败 | 抛 `GenError`，UI 提示换图/重试，不产生半成品资源。 |
 | App 未运行时触发 hook | CLI 连接失败 → 立即 `defer` fail-open，工具走原生流程。 |
-| 回传超时（审批/提问） | CLI 到达超时 → `defer` fail-open。 |
+| 回传超时（审批/提问） | App 已连接但用户未响应时，按决策倒计时（默认 20s）到点 → `defer` fail-open。 |
 | socket 损坏/残留 | App 启动时清理并重建 socket；CLI 连接失败即 fail-open。 |
 | 工具配置被用户手改 | 安装幂等校验；卸载按标记精确移除；写入前备份。 |
 | `allow` 抑制 bug（Claude Code 特定版本） | 优先保障 `deny`；`allowOnce` 尽力而为，必要时退化为再次原生确认（不影响安全）。 |
+| `allowAlways` / `updatedInput` schema 未验证或版本不兼容 | 隐藏"始终允许"；提问卡降级为提醒 + 回终端处理，不阻塞审批主链路。 |
+| 完成事件无摘要字段 | completion 气泡显示兜底文案，不因缺少 Markdown 摘要丢弃事件。 |
+| Codex hook 已写入但未 trust | 设置页显示"待信任"，引导 `/hooks`；验收不把写入配置等同于生效。 |
 | 并发多个需回传气泡 | 以 `requestId` 关联；堆叠展示，仅最上层可操作（见 §5.3.5）。 |
 | Codex 提问无法回填 | 降级为 `requiresTerminalApproval` 审批卡 + 引导回终端。 |
 
@@ -599,16 +610,17 @@ VibePet/
 - `ClaudeCodeAdapter`：给定样例 `PreToolUse`（Bash/Edit/Read/WebFetch/AskUserQuestion）、`Stop`、`Notification` 事件 JSON，断言归一化为正确 `BubbleContent`；给定 `BridgeResponse`，断言 stdout 字节与 exit 语义（含 `question` 的 `updatedInput` 预填）。
 - `CodexAdapter`：`PermissionRequest`/`notify` 解析；提问降级为 `requiresTerminalApproval`。
 - 风险分级启发式：危险命令模式 → `.high`。
-- `ConfigStore` / `PetAssetStore` 读写与幂等；安装器对样例 `settings.json` / `config.toml` 注入与精确移除（幂等、备份）。
+- `ConfigStore` / `PetAssetStore` 读写与幂等；安装器对样例 `settings.json` / `config.toml` / `hooks.json` 注入与精确移除（幂等、备份、Codex `installedNeedsTrust` 状态）。
+- Claude Code 能力 spike fixtures：`allowAlways`、`AskUserQuestion updatedInput`、`Stop` payload 摘要字段分别用当前版本样例固化；不通过时断言对应降级分支。
 
 ### 8.2 生成质量基准（离线）
-- 20 张测试照片集，跑 `LocalCutoutGenerator`，记录耗时与人工边缘打分；校验 PRD 的通过率与时延目标。
+- 20 张固定测试照片集，按 `clearSubject` / `edgeHard` / `lowContrast` / `multiSubject` 标签统计；跑 `LocalCutoutGenerator`，记录耗时与人工边缘打分；分别校验清晰主体子集 ≥ 90% 与全量 ≥ 80%，并输出每个标签组的通过率。
 
 ### 8.3 端到端（脚本化）
 - 模拟 Claude Code `PreToolUse`（Bash）：喂 `VibePetHooks` stdin，App 运行态下断言审批气泡出现 ≤ 500ms、点"拒绝" → stdout 为 `deny` JSON、点"允许一次" → `allow` JSON。
 - 模拟 Claude Code `AskUserQuestion`：断言提问气泡渲染选项；提交 → stdout 为 `allow` + `updatedInput` 含预填 `answers`。
-- 模拟 Codex `PermissionRequest` 审批回路；提问场景断言降级提示。
-- Fail-open：App 关闭态下喂事件，断言 CLI ≤ 2s 内 `defer` 退出。
+- 模拟 Codex `PermissionRequest` 审批回路；提问场景断言降级提示；Codex 安装态覆盖"已写入待信任"与"收到真实事件后标记启用"。
+- Fail-open：App 关闭态/连接失败态喂事件，断言 CLI ≤ 2s 内 `defer` 退出；App 已连接但用户未响应时，断言默认 20s 倒计时后 `defer`。
 
 ### 8.4 手动验收（Demo 脚本）
 导入一张宠物照 → 见到精灵出现并呼吸 → 在真实 Claude Code 会话里触发一次需审批操作 → 宠物气泡弹出 → 点"拒绝" → 确认 Claude Code 取消该操作。即 PRD 的端到端成功标准。
@@ -663,7 +675,7 @@ M0 脚手架 + Bridge 模型
 - **交付物**：CLI/测试入口跑通"图片 → `sprite.png` + `meta.json`"；离线生成质量基准脚本（§8.2，20 张测试集）。
 - **退出标准**（对应 **US-1**、抠图 KPI）：
   - 抠图 P50 ≤ 3s、P95 ≤ 8s（Apple Silicon）。
-  - 20 张"主体清晰"测试集边缘可用率 ≥ 80%（清晰子集 ≥ 90%）。
+  - 20 张固定测试集：清晰主体子集边缘可用率 ≥ 90%，全量边缘可用率 ≥ 80%。
   - 无主体 → 抛 `GenError.noSubject`，不产生半成品资源。
 - **依赖**：M0。
 
@@ -696,17 +708,18 @@ M0 脚手架 + Bridge 模型
 - **退出标准**（对应 **US-3**、端到端闭环与延迟 KPI、Fail-open KPI）：
   - 端到端 Demo 成功：照片→精灵→桌面→`PreToolUse`→气泡→点"拒绝"→工具调用被真实取消（§8.4）。
   - 工具触发到气泡出现 ≤ 500ms。
-  - 超时 / App 未运行 → CLI ≤ 2s `defer` fail-open，成功率 100%（§8.3）。
+  - App 未运行/连接失败 → CLI ≤ 2s `defer` fail-open；用户未响应 → 默认 20s 倒计时后 `defer`，成功率 100%（§8.3）。
   - `deny` 路径可靠；`allow` 尽力而为并按 §7 处理已知 bug。
 - **依赖**：M3。
 
 ### M5 · 提问闭环（`AskUserQuestion`）
 
 - **目标**：结构化多选题在气泡内作答，经 `updatedInput` 预填回工具。
-- **范围**：`ClaudeCodeAdapter` 拦截 `PreToolUse(tool=AskUserQuestion) → .question`（§4.1）；提问气泡渲染单选/多选/自由文本（§5.3.4）；`QuestionAnswer` 回传 + `updatedInput` 预填回写（§3.3、§4.1）。
-- **交付物**：触发 `AskUserQuestion` → 气泡渲染选项 → 提交 → stdout 为 `allow` + 含预填 `answers` 的 `updatedInput`，工具不再弹原生提问。
+- **范围**：先完成 `AskUserQuestion updatedInput` schema spike；通过后 `ClaudeCodeAdapter` 拦截 `PreToolUse(tool=AskUserQuestion) → .question`（§4.1）；提问气泡渲染单选/多选/自由文本（§5.3.4）；`QuestionAnswer` 回传 + `updatedInput` 预填回写（§3.3、§4.1）。若 spike 未通过，MVP 降级为提醒 + 回终端处理。
+- **交付物**：schema spike 通过时，触发 `AskUserQuestion` → 气泡渲染选项 → 提交 → stdout 为 `allow` + 含预填 `answers` 的 `updatedInput`，工具不再弹原生提问；schema spike 未通过时，交付降级提醒 + 回终端处理。
 - **退出标准**（对应 **US-3b**）：
-  - 提问气泡提交后答案正确预填，原生提问被抑制（§8.3）。
+  - schema spike 通过时：提问气泡提交后答案正确预填，原生提问被抑制（§8.3）。
+  - schema spike 未通过时：降级气泡正确提示回终端处理，不阻塞原生提问。
   - 未作答超时 → fail-open 回退原生提问。
 - **依赖**：M4。
 
@@ -720,6 +733,7 @@ M0 脚手架 + Bridge 模型
 - **交付物**：两工具均可一键安装/卸载并显示安装态；Codex 审批回路与提问降级可用；签名公证后的可分发包。
 - **退出标准**（对应 **US-5 / US-3（Codex）/ US-4（Codex）/ US-0 的 ③**）：
   - 安装幂等、卸载精确（保留用户其它 hooks）、写前备份与确认（§8.1 安装器测试、US-5）。
+  - Codex 安装态能区分"已写入待信任"与"已启用"，并覆盖 `/hooks` trust 引导或真实事件激活证据。
   - Codex `PermissionRequest` 审批回路通过；提问降级提示正确（§8.3）。
   - onboarding 第 ③ 步只列检测到的工具、可跳过（US-0）。
   - §8 全部测试通过；§1 全部 KPI 达标。
@@ -755,5 +769,6 @@ open-vibe-island 采用 **GPL-3.0**（传染性 copyleft）：直接复制或衍
 - **可以借鉴的是「思想/模式」**（不受版权保护）：规范事件 + 数据驱动渲染、hook CLI + Unix socket 桥接、安装时拷贝二进制到稳定路径、审批/提问/完成的交互形态等架构思路。
 - **不复用其源码**：所有模型（`BridgeEnvelope`/`BubbleContent`/`ApprovalContent`/…）均为独立设计与命名，不照抄其 `AgentEvent`/`PermissionRequest`/视图代码，不做近似改写（clean-room）。
 - **直接依据的是工具方公开 API**：`PreToolUse` 的 `permissionDecision`/`updatedInput`、`AskUserQuestion` 的 `answers`/`annotations` schema、Codex `PermissionRequest`/`notify` —— 这些来自 Claude Code / Codex 官方文档与工具 schema，使用它们不构成对 open-island 的衍生。
-- **实现期纪律**：阅读 open-island 用于「理解机制/印证可行性」，落码时凭官方文档与自有设计独立编写；不在仓库中保留其源码片段。
+- **实现期纪律**：阅读 open-island 仅用于「理解机制/印证可行性」，落码时凭官方文档与自有设计独立编写；不在仓库中保留其源码片段。每个涉及 hook/schema/安装器的实现 PR 必须附上所依据的官方文档链接或本机事件 fixture，不能以 open-island 代码作为实现证据。
+- **隔离建议**：若实现者已经深入阅读过 open-island 具体源码，涉及同一模块落码前先写一份自有接口设计/测试 fixture，再按测试实现；高风险模块（adapter、安装器、socket 协议）优先由未读源码的人复核 diff，确认不存在近似改写。
 - 引入任何第三方依赖（生成模型权重、库）时单独核对其许可证（如 TripoSR MIT、部分 Hunyuan3D 权重为非商用）。

@@ -21,8 +21,8 @@ VibePet 是一个 macOS 原生桌面宠物应用。用户上传自己宠物或�
 | 端到端闭环 | 上传照片 → 生成精灵 → 桌面显示 → Claude Code 触发 `PreToolUse` → 宠物气泡出现 → 点击"拒绝" → 工具调用被真实取消。全链路 Demo 成功跑通。 |
 | 决策回路延迟 | 工具触发到宠物气泡出现 ≤ 500ms（本地 Unix socket）。 |
 | 本地抠图耗时 | Apple Silicon 上 P50 ≤ 3s，P95 ≤ 8s。 |
-| 抠图主观可用率 | 20 张"主体清晰"测试照片中，边缘质量可接受的 ≥ 80%。 |
-| Fail-open 可靠性 | App 未运行时，hook 在 ≤ 2s 内退出且不阻塞 Agent，成功率 100%。 |
+| 抠图主观可用率 | 固定 20 张离线评测集：主体清晰子集 ≥ 90%，全量（含毛发/低对比/多主体等困难样本）≥ 80%。 |
+| Fail-open 可靠性 | App 未运行/连接失败时，hook 在 ≤ 2s 内退出且不阻塞 Agent，成功率 100%；用户未响应超时按可配置倒计时（默认 20s）后 fail-open。 |
 
 ---
 
@@ -75,14 +75,15 @@ VibePet 是一个 macOS 原生桌面宠物应用。用户上传自己宠物或�
 - Agent 触发决策类 hook 时，宠物播放"提醒"动画并弹出气泡，展示操作摘要（工具名 / 命令 / 目标文件）与"允许""拒绝"按钮。
 - 气泡紧贴宠物、以小尾巴指向它，并朝屏幕内侧展开、避让屏幕边缘；多个待决策请求堆叠显示并标注"还有 N 个待处理"。
 - 点击"拒绝"：工具调用被真实取消（Claude Code 经 `PreToolUse` 返回 `deny`；Codex 经 `PermissionRequest` 返回 deny）。
-- 点击"允许"：工具调用放行（"允许一次"；命中 `alwaysAllow` 时另有"始终允许"）。
-- 用户在超时时间内未响应，或 App 未运行：hook **fail-open**，回退到工具自身的原生审批流程，绝不卡住开发者。
+- 点击"允许"：工具调用放行（"允许一次"；`allowAlways` schema spike 通过且命中对应能力时另有"始终允许"）。
+- 用户在倒计时内未响应，或 App 未运行/连接失败：hook **fail-open**，回退到工具自身的原生审批流程，绝不卡住开发者。
 
 **US-3b：结构化提问（多选题）**
 > 作为用户，当 Claude Code 用 `AskUserQuestion` 问我多选题时，我想直接在宠物气泡里点选答案，这样不用切回终端。
 
 验收标准：
-- 宠物气泡渲染题干 + 选项（含多选 / 自由文本），点选并提交后答案经 hook `updatedInput` 预填回工具，工具不再弹原生提问。
+- Claude Code `AskUserQuestion updatedInput` schema spike 通过时，宠物气泡渲染题干 + 选项（含多选 / 自由文本），点选并提交后答案经 hook `updatedInput` 预填回工具，工具不再弹原生提问。
+- 若该 schema 未验证通过或当前 Claude Code 版本不兼容，MVP 降级为提醒 + 引导回终端处理，且不阻塞原生提问。
 - Codex 暂不支持气泡内作答：降级为提醒 + 引导回终端处理（纯 hook 限制，见技术方案 §4.2）。
 - 未作答超时：fail-open，回退原生提问。
 
@@ -90,7 +91,7 @@ VibePet 是一个 macOS 原生桌面宠物应用。用户上传自己宠物或�
 > 作为用户，当 Agent 完成一轮任务或报错时，我想让宠物提醒我一下（无需我做决策），这样我能及时回到工作。
 
 验收标准：
-- 接收 Claude Code 的 `Stop`（完成，Markdown 摘要）/ `Notification`（状态）、Codex 的 `notify`（`agent-turn-complete`）事件。
+- 接收 Claude Code 的 `Stop`（完成事件）/ `Notification`（状态）、Codex 的 `notify`（`agent-turn-complete`）事件；若事件原生 payload 不含可展示摘要，则使用可读兜底文案（如"这轮任务已结束"）并记录后续可增强来源。
 - 宠物播放轻量提醒动画 + 气泡文案，不带按钮，数秒后自动收起。
 - MVP 仅展示完成摘要，**不做"回复 Agent"**（排入 v1.1）。
 
@@ -98,7 +99,8 @@ VibePet 是一个 macOS 原生桌面宠物应用。用户上传自己宠物或�
 > 作为用户，我想一键把 VibePet 的 hooks 装进 Claude Code / Codex 配置，也能干净卸载，这样我不必手动改配置文件。
 
 验收标准：
-- 提供安装器（CLI 或 App 内按钮），自动向 `~/.claude/settings.json` 与 Codex `config.toml` 写入 hook 条目，并做幂等处理（重复安装不重复写入）。
+- 提供安装器（CLI 或 App 内按钮），自动向 `~/.claude/settings.json` 与 Codex `config.toml` / `hooks.json` 写入 hook 条目，并做幂等处理（重复安装不重复写入）。
+- Codex 安装完成后，如当前 Codex 版本要求 hook review/trust，安装态必须明确标为"待信任"，并引导用户在 Codex `/hooks` 中确认；未被信任前不得宣称 Codex hook 已生效。
 - **写入前明确告知并确认**：点"安装"后先展示将修改的配置文件路径、将拷贝 hook 二进制到稳定路径（§1.2）、以及已自动备份原配置，用户确认后才落盘。
 - 通过 **manifest 文件**记录 VibePet 写入的条目与 hook 二进制版本，据此实现幂等校验、安装态显示与精确卸载。
 - 卸载时按 manifest 精确移除 VibePet 写入的条目，保留用户其它 hooks 配置；不覆盖用户已有的非 VibePet 自定义条目。
@@ -138,8 +140,8 @@ VibePet 是一个 macOS 原生桌面宠物应用。用户上传自己宠物或�
 ### 3.2 质量评估策略（Evaluation Strategy）
 
 **抠图质量评估（离线基准）**
-- 构建 20 张测试照片集（含猫/狗/人物，覆盖清晰主体、毛发边缘、低对比度、多主体等场景）。
-- 人工主观打分（边缘质量 1–5 分），"≥3 分可接受"判定为通过；目标通过率 ≥ 80%（清晰主体子集 ≥ 90%）。
+- 构建并冻结 20 张测试照片集，按标签拆分：`clearSubject`（主体清晰、无遮挡）、`edgeHard`（毛发/半透明边缘）、`lowContrast`、`multiSubject`。同一张可有多个标签。
+- 人工主观打分（边缘质量 1–5 分），"≥3 分可接受"判定为通过；清晰主体子集目标通过率 ≥ 90%，全量目标通过率 ≥ 80%。报告必须同时列出两组分母，避免把困难样本混入/排除后导致 KPI 口径漂移。
 - 记录每张耗时，校验 P50/P95 时延目标。
 
 **决策回路评估（端到端）**
@@ -147,7 +149,8 @@ VibePet 是一个 macOS 原生桌面宠物应用。用户上传自己宠物或�
   - 气泡出现延迟 ≤ 500ms；
   - 点击"拒绝"后工具调用确被取消（检查 Agent 行为/输出）；
   - 点击"允许"后工具放行；
-  - App 未运行/超时场景下 hook 在 ≤ 2s fail-open 退出。
+  - App 未运行/连接失败场景下 hook 在 ≤ 2s fail-open 退出；
+  - 用户未响应场景按默认 20s（可配置）倒计时后 fail-open，且不超出对应工具 hook timeout。
 
 ---
 
@@ -194,11 +197,14 @@ AI 工具 hook 触发 → VibePetHooks CLI（含事件 JSON, stdin）
 |---|---|---|
 | Vision 抠图对蓬松毛发/半透明边缘有瑕疵 | 部分照片观感差 | 设定"主体清晰"的引导提示；提供手动重试/换图；v1.1 用云端风格化提升观感。 |
 | Claude Code `PreToolUse` 的 `allow` 抑制原生弹窗存在已知 bug（特定版本） | "允许"路径可能仍弹原生确认 | `deny`（拒绝/阻断）路径可靠，优先保障；`allow` 作尽力而为并在文档标注；必要时回退 defer。 |
+| Claude Code `allowAlways` / `AskUserQuestion updatedInput` 的具体 schema 与版本差异 | "始终允许"或气泡内答题可能无法稳定生效 | 进入实现前做官方 schema spike；若无法验证，`allowAlways` 隐藏，`AskUserQuestion` 降级为提醒 + 回终端处理。 |
+| Claude Code `Stop` / Codex `notify` 不一定携带可展示摘要 | 完成气泡可能缺少实际内容 | adapter 先按原生 payload 提取摘要；缺失时显示兜底文案，不把"Markdown 摘要"作为硬依赖。 |
 | Codex `notify` 仅 `agent-turn-complete`，覆盖"需输入"有限 | Codex 通知面偏弱 | 决策场景用 `PermissionRequest` hook 覆盖；通知面待官方扩展。 |
-| 阻塞型 hook 等待导致 Agent 卡顿 | 体验/可用性 | 超时 fail-open（默认数秒）；App 未运行立即退出回退原生流程。 |
+| Codex hook 需要用户 review/trust，且多来源匹配 hook 会并发执行 | 安装后可能未生效，VibePet 也不能独占审批流 | 安装态区分"已写入/待信任/已信任"；验收必须覆盖 trust 流程；回写逻辑按幂等、可并发设计，不假设其它 hook 不存在。 |
+| 阻塞型 hook 等待导致 Agent 卡顿 | 体验/可用性 | App 未运行/连接失败 ≤ 2s fail-open；用户未响应按默认 20s 倒计时 fail-open；工具 hook timeout 必须大于 VibePet 倒计时。 |
 | 置顶窗口在全屏 App / 多 Space 表现异常 | 宠物被遮挡 | 设置合适的窗口层级与 collectionBehavior；在全屏场景验证。 |
 | App 公证/权限（如未来跳回终端需辅助功能权限） | 分发与体验 | MVP 不依赖辅助功能；分发前做签名与公证。 |
-| 参考项目 open-vibe-island 为 GPL-3.0（copyleft） | 误用其源码会传染许可证 | 仅借鉴架构思想，clean-room 独立实现，不复用源码；依据工具方公开 API（详见技术方案 §11）。 |
+| 参考项目 open-vibe-island 为 GPL-3.0（copyleft） | 误用其源码会传染许可证 | 仅借鉴架构思想，clean-room 独立实现，不复用源码；实现任务必须保留官方 API 依据与自有设计记录（详见技术方案 §11）。 |
 
 ### 5.2 分阶段路线图
 **MVP（v0.1）—— 本文档范围**

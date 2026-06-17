@@ -99,7 +99,7 @@
 
 ### M1-5 · 离线生成质量基准脚本
 
-- **验收标准**（对应抠图 KPI）：脚本对 20 张测试照片集跑 `LocalCutoutGenerator`，记录每张耗时并汇总 P50/P95，输出供人工边缘打分的结果（§8.2）；运行后可判定 P50 ≤ 3s、P95 ≤ 8s、清晰主体子集可用率 ≥ 90% / 整体 ≥ 80%。
+- **验收标准**（对应抠图 KPI）：脚本对固定 20 张测试照片集跑 `LocalCutoutGenerator`，照片需带 `clearSubject` / `edgeHard` / `lowContrast` / `multiSubject` 标签；记录每张耗时并汇总 P50/P95，输出供人工边缘打分的结果（§8.2）；运行后可判定 P50 ≤ 3s、P95 ≤ 8s、清晰主体子集可用率 ≥ 90% / 全量 ≥ 80%，并列出各标签分母。
 - **依赖**：M1-2、M1-3。
 - **涉及文件/类型**：`Tests/Benchmarks/CutoutBenchmark.swift` 或独立可执行 `Tools/CutoutBenchmark/`；测试照片集 `Tests/Fixtures/photos/`。
 
@@ -171,7 +171,7 @@
 
 ### M3-4 · ClaudeCodeAdapter — Stop / Notification 解析
 
-- **验收标准**（对应 US-4，§8.1）：给定样例 `Stop` 事件 → `.completion`（summary 作 Markdown）；`Notification` → `.status`（单行）；解析单测断言归一化为正确 `BubbleContent`。
+- **验收标准**（对应 US-4，§8.1）：给定样例 `Stop` 事件 → `.completion`，优先提取 payload 中的 summary / transcript 摘要；若样例不含可展示摘要则生成可读兜底文案；`Notification` → `.status`（单行）；解析单测断言归一化为正确 `BubbleContent`。
 - **依赖**：M0-4。
 - **涉及文件/类型**：`VibePetCore/Adapters/ClaudeCodeAdapter.swift`（解析部分）；`Tests/VibePetCoreTests/ClaudeCodeAdapterParseTests.swift`。
 
@@ -201,13 +201,19 @@
 
 ### M4-3 · ClaudeCodeAdapter — 审批决策回写
 
-- **验收标准**（§8.1）：`deny` → `{"hookSpecificOutput":{...,"permissionDecision":"deny","permissionDecisionReason":...}}`；`allowOnce` → `permissionDecision:"allow"`；`allowAlways` → `allow` + 写权限规则（`scopeHint`=tool_name，持久化尽力而为、至少本会话生效）；`defer` → 不输出 JSON、`exit 0`（§4.1、§7）。回写字节与 exit 语义单测全绿。
+- **验收标准**（§8.1）：`deny` → `{"hookSpecificOutput":{...,"permissionDecision":"deny","permissionDecisionReason":...}}`；`allowOnce` → `permissionDecision:"allow"`；`defer` → 不输出 JSON、`exit 0`（§4.1、§7）。`allowAlways` 仅在 M4-3a schema spike 通过时启用；未通过时 adapter 不生成 `alwaysAllow`。回写字节与 exit 语义单测全绿。
 - **依赖**：M4-1。
 - **涉及文件/类型**：`VibePetCore/Adapters/ClaudeCodeAdapter.swift`（encodeResponse）；`Tests/VibePetCoreTests/ClaudeCodeEncodeTests.swift`。
 
+### M4-3a · Claude allowAlways schema spike
+
+- **验收标准**：用当前 Claude Code 版本的官方文档/本机 hook fixture 验证 `allowAlways` 或等价持久/会话权限规则的可落地方式；产出最小 fixture 与单测。若无法验证，记录为不支持，MVP 隐藏"始终允许"按钮，后续任务不得把 `allowAlways` 作为硬依赖。
+- **依赖**：M4-1。
+- **涉及文件/类型**：`Tests/Fixtures/claude/`；`Tests/VibePetCoreTests/ClaudeCodeAllowAlwaysSpikeTests.swift`；必要时更新 `VibePetCore/Adapters/ClaudeCodeAdapter.swift`。
+
 ### M4-4 · CLI 阻塞回路与 fail-open 超时
 
-- **验收标准**（对应 Fail-open KPI，§3.4、§8.3）：决策类事件下 CLI 发送后保持连接等待 `BridgeResponseEnvelope`（默认 20s 可配）；收到→按 adapter 回写 stdout→`exit 0`；超时或连不上→`defer` fail-open，≤2s 退出，成功率 100%。
+- **验收标准**（对应 Fail-open KPI，§3.4、§8.3）：决策类事件下 CLI 发送后保持连接等待 `BridgeResponseEnvelope`（用户响应倒计时默认 20s 可配，且小于工具 hook timeout）；收到→按 adapter 回写 stdout→`exit 0`；App 未运行/连接失败/socket 损坏→`defer` fail-open 且 ≤2s 退出，成功率 100%；App 已连接但用户未响应→默认 20s 到点后 `defer`。
 - **依赖**：M3-1、M4-3。
 - **涉及文件/类型**：`VibePetHooks/HookRuntime.swift`（阻塞等待+超时）；`VibePetCore/Bridge/BridgeClient.swift`（等待回传 API）。
 
@@ -219,7 +225,7 @@
 
 ### M4-6 · 回传通路与 requestId 配对
 
-- **验收标准**：App 经同一阻塞连接回传 `BridgeResponseEnvelope`，`requestId` 与请求配对（§3.3、§3.4）；点"拒绝"→回 `deny`、点"允许一次"→回 `allowOnce`、"始终允许"→`allowAlways(scopeHint)`。
+- **验收标准**：App 经同一阻塞连接回传 `BridgeResponseEnvelope`，`requestId` 与请求配对（§3.3、§3.4）；点"拒绝"→回 `deny`、点"允许一次"→回 `allowOnce`；M4-3a 通过时，"始终允许"→`allowAlways(scopeHint)`，否则不显示该按钮。
 - **依赖**：M4-5、M0-5。
 - **涉及文件/类型**：`VibePetApp/Bridge/BridgeServerHost.swift`（回传）、`VibePetApp/Pet/PetController.swift`。
 
@@ -231,7 +237,7 @@
 
 ### M4-8 · 审批闭环端到端 Demo
 
-- **验收标准**（对应端到端闭环 KPI、延迟 KPI、Fail-open KPI，§8.3/§8.4）：真实 Claude Code 会话触发需审批操作 → 气泡 ≤500ms 出现 → 点"拒绝"工具调用被真实取消、点"允许一次"放行；超时/App 未运行 ≤2s `defer`。手动验收脚本（§8.4）跑通。
+- **验收标准**（对应端到端闭环 KPI、延迟 KPI、Fail-open KPI，§8.3/§8.4）：真实 Claude Code 会话触发需审批操作 → 气泡 ≤500ms 出现 → 点"拒绝"工具调用被真实取消、点"允许一次"放行；App 未运行/连接失败 ≤2s `defer`；App 已连接但用户未响应时默认 20s 倒计时后 `defer`。手动验收脚本（§8.4）跑通。
 - **依赖**：M4-4、M4-6、M4-7。
 - **涉及文件/类型**：`Tests/E2E/ApprovalFlowTests.swift`；安装到本机 `~/.claude/settings.json`（手动验收）。
 
@@ -241,10 +247,16 @@
 
 > 里程碑目标：结构化多选题在气泡内作答，经 `updatedInput` 预填回工具。对应 US-3b。
 
+### M5-0 · AskUserQuestion updatedInput schema spike
+
+- **验收标准**：用当前 Claude Code 版本的官方文档/本机 hook fixture 验证 `AskUserQuestion` 的输入 schema、`updatedInput` 回写字段与抑制原生提问的实际行为；产出 fixture、最小回写样例与结论。若无法验证，M5 后续实现走降级路径：提醒 + 回终端处理，不承诺气泡内作答。
+- **依赖**：M4-1、M4-4。
+- **涉及文件/类型**：`Tests/Fixtures/claude/ask-user-question.json`；`Tests/VibePetCoreTests/ClaudeCodeQuestionSpikeTests.swift`。
+
 ### M5-1 · ClaudeCodeAdapter — AskUserQuestion → question 解析
 
 - **验收标准**（§8.1）：`PreToolUse`（`tool_name`=AskUserQuestion）→ `.question`；从 `tool_input.questions` 映射 `QuestionItem`/`QuestionOption`（header/prompt/options/multiSelect/freeform，§4.1）；解析单测全绿。
-- **依赖**：M4-1。
+- **依赖**：M5-0。
 - **涉及文件/类型**：`VibePetCore/Adapters/ClaudeCodeAdapter.swift`（question 解析）；`Tests/VibePetCoreTests/ClaudeCodeQuestionParseTests.swift`。
 
 ### M5-2 · 提问气泡（QuestionCard）
@@ -255,7 +267,7 @@
 
 ### M5-3 · updatedInput 预填回写
 
-- **验收标准**（对应 US-3b，§4.1/§8.3）：`question` 回传 → adapter 返回 `permissionDecision:"allow"` 且带 `updatedInput`，把答案预填进 AskUserQuestion 的 `answers`/`annotations`；工具拿到已填输入不再弹原生提问；未作答超时 → `defer` 回退原生提问。提交后 stdout 含预填 `answers` 的断言通过。
+- **验收标准**（对应 US-3b，§4.1/§8.3）：M5-0 通过时，`question` 回传 → adapter 返回 `permissionDecision:"allow"` 且带 `updatedInput`，把答案预填进 AskUserQuestion 的 `answers`/`annotations`；工具拿到已填输入不再弹原生提问；未作答超时 → `defer` 回退原生提问。M5-0 未通过时，本任务验收降级输出：不写 `updatedInput`，改为提醒 + 回终端处理，且不阻塞原生提问。
 - **依赖**：M5-1、M5-2、M4-4。
 - **涉及文件/类型**：`VibePetCore/Adapters/ClaudeCodeAdapter.swift`（question encodeResponse）；`Tests/VibePetCoreTests/ClaudeCodeQuestionEncodeTests.swift`、`Tests/E2E/QuestionFlowTests.swift`。
 
@@ -273,7 +285,7 @@
 
 ### M6-2 · CodexAdapter — 回写与提问降级
 
-- **验收标准**（对应 US-3 Codex，§4.2/§8.3）：`allowOnce`/`allowAlways` → allow（持久规则 Codex 支持则写、否则等同本次 allow）；`deny` → deny；`question` → `defer` + 引导回终端；MVP 只用 allow/deny/decline。回写单测 + Codex 审批回路 E2E 通过。
+- **验收标准**（对应 US-3 Codex，§4.2/§8.3）：`allowOnce`/`allowAlways` → allow（`allowAlways` 在 Codex MVP 中等同本次 allow，除非官方支持持久规则并经 fixture 验证）；`deny` → deny；`question` → `defer` + 引导回终端；MVP 只用 allow/deny/decline。回写逻辑需幂等，不假设 VibePet 是唯一匹配 hook；回写单测 + Codex 审批回路 E2E 通过。
 - **依赖**：M6-1、M4-4。
 - **涉及文件/类型**：`VibePetCore/Adapters/CodexAdapter.swift`（encodeResponse）；`Tests/VibePetCoreTests/CodexAdapterEncodeTests.swift`、`Tests/E2E/CodexApprovalFlowTests.swift`。
 
@@ -291,20 +303,26 @@
 
 ### M6-5 · VibePetSetup — manifest 驱动安装/卸载/status
 
-- **验收标准**（对应 US-5，§4.3/§8.1）：`install` 幂等（已装跳过、版本落后仅重拷），写前展示将改动文件/二进制/备份并备份原配置，写 `install-manifest.json`；`uninstall` 按 manifest 精确移除 `writtenHooks` 条目、保留用户其它 hooks；`status` 返回 已安装/未安装/版本落后；不覆盖用户非 VibePet 条目。对样例 `settings.json`/`config.toml` 的注入与精确移除单测通过（幂等、备份）。
+- **验收标准**（对应 US-5，§4.3/§8.1）：`install` 幂等（已装跳过、版本落后仅重拷），写前展示将改动文件/二进制/备份并备份原配置，写 `install-manifest.json`；`uninstall` 按 manifest 精确移除 `writtenHooks` 条目、保留用户其它 hooks；`status` 返回 未安装/已写入待信任/已启用/版本落后；不覆盖用户非 VibePet 条目。对样例 `settings.json`/`config.toml`/`hooks.json` 的注入与精确移除单测通过（幂等、备份、Codex trust 状态）。
 - **依赖**：M6-4、M3-4、M6-1。
 - **涉及文件/类型**：`VibePetSetup/HookInstaller.swift`、`VibePetSetup/InstallManifest.swift`、`VibePetSetup/ClaudeCodeConfigWriter.swift`、`VibePetSetup/CodexConfigWriter.swift`；`Tests/VibePetSetupTests/InstallerTests.swift`。
 
+### M6-5a · Codex hook trust 激活态
+
+- **验收标准**：Codex 写入后默认显示"已写入，待在 `/hooks` 信任"；设置页/CLI 给出可读引导；当 VibePet 首次收到真实 Codex hook 事件，manifest 或运行态缓存可标记为 `trustedActive`；无法自动判断时不得显示"已启用"。单测覆盖 `installedNeedsTrust → trustedActive` 状态转换。
+- **依赖**：M6-5、M6-1。
+- **涉及文件/类型**：`VibePetSetup/InstallManifest.swift`、`VibePetApp/Settings/HookInstallSection.swift`、`Tests/VibePetSetupTests/CodexHookTrustTests.swift`。
+
 ### M6-6 · 设置页与 onboarding ③（安装 hooks）
 
-- **验收标准**（对应 US-5 / US-0③，§5.4）：设置页含 启用工具、一键安装/卸载（调 `VibePetSetup`、据 manifest 显示各工具安装态/版本）、决策超时、开机自启、生成器选择（MVP 仅本地）；onboarding 第③步只列检测到的工具（存在 `~/.claude/` 或 Codex 配置才显示）、各带安装态、可"以后再说"跳过、未检测到任何工具给可读提示。
-- **依赖**：M6-5、M2-6。
+- **验收标准**（对应 US-5 / US-0③，§5.4）：设置页含 启用工具、一键安装/卸载（调 `VibePetSetup`、据 manifest 显示各工具安装态/版本/trust 状态）、决策超时、开机自启、生成器选择（MVP 仅本地）；onboarding 第③步只列检测到的工具（存在 `~/.claude/` 或 Codex 配置才显示）、各带安装态、可"以后再说"跳过、未检测到任何工具给可读提示；Codex 待信任时必须显示 `/hooks` 引导。
+- **依赖**：M6-5a、M2-6。
 - **涉及文件/类型**：`VibePetApp/Settings/SettingsView.swift`、`VibePetApp/Settings/HookInstallSection.swift`、`VibePetApp/Onboarding/OnboardingFlow.swift`（接入③）。
 
 ### M6-7 · 发布打磨（主题/错误/签名公证/基准达标）
 
 - **验收标准**（§7/§8）：`BubbleTheme` 集中配色/圆角/字体、跟随明暗主题；错误提示按 §7 表统一；App 签名与公证完成；§8 全部测试通过、§1 全部 KPI 达标（端到端闭环、≤500ms、抠图时延/可用率、Fail-open 100%）。
-- **依赖**：M6-2、M6-3、M6-6、M4-8、M5-3、M1-5。
+- **依赖**：M6-2、M6-3、M6-6、M4-8、M5-3、M1-5、M4-3a。
 - **涉及文件/类型**：`VibePetApp/Bubble/BubbleTheme.swift`、`VibePetApp/Common/ErrorPresenter.swift`、`Scripts/notarize.sh`、CI 配置。
 
 ---
@@ -314,14 +332,18 @@
 **关键路径（决定 MVP 完成时间）**：
 
 ```
-M0-2 → M0-3 → M0-4/M0-5 → M3-1/M3-2 → M3-3 → M4-1 → M4-3/M4-5 → M4-4/M4-6 → M4-8 → M5 → M6-2 → M6-7
+M0-2 → M0-3 → M0-4/M0-5 → M3-1/M3-2 → M3-3 → M4-1
+  → M4-3/M4-3a/M4-5 → M4-4/M4-6 → M4-8
+  → M5-0 → M5 → M6-2/M6-5a → M6-7
 ```
 
 **可并行的支线**：
 
 - **生成管线（M1）** 仅依赖 M0-1，可与 M0-2~M0-6 及 M2 并行推进；M1-5 基准可最后补。
 - **宠物窗（M2）** 的 M2-1/M2-2/M2-4 仅需 M0-1/M1-1，可早启动；M2-5 需 M1 管线就位。
-- **风险分级（M4-2）**、**队列堆叠（M4-7）** 是 M4 内可并行的独立模块。
+- **风险分级（M4-2）**、**allowAlways spike（M4-3a）**、**队列堆叠（M4-7）** 是 M4 内可并行的独立模块；M4-3a 只 gate "始终允许"按钮，不 gate deny/allowOnce 主闭环。
+- **AskUserQuestion spike（M5-0）** 应先于 M5 UI/回写实现；若失败，M5 走降级验收。
 - **Codex 解析（M6-1）** 一旦 M4-1 完成即可起步，不必等审批闭环全部跑通。
+- **Codex trust 激活态（M6-5a）** 可与设置页打磨并行，但 M6 发布验收必须能区分"已写入待信任"与"已启用"。
 
 **里程碑级依赖**（与技术方案 §9 依赖图一致）：M0 → {M1, M3}；M2 ← {M0,M1}；M4 ← M3；M5 ← M4；M6 ← M5。
