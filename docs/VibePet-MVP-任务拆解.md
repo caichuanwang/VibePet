@@ -24,6 +24,7 @@
 - [M5 · 提问闭环](#m5--提问闭环)
 - [M6 · Codex 适配 + 安装器 + 发布打磨](#m6--codex-适配--安装器--发布打磨)
 - [关键路径与并行建议](#关键路径与并行建议)
+- [技术债与后续跟踪（Code Review）](#技术债与后续跟踪code-review)
 
 ---
 
@@ -349,3 +350,42 @@ M0-2 → M0-3 → M0-4/M0-5 → M3-1/M3-2 → M3-3 → M4-1
 **里程碑级依赖**（与技术方案 §9 依赖图一致）：M0 → {M1, M3}；M2 ← {M0,M1}；M4 ← M3；M5 ← M4；M6 ← M5。
 
 > 里程碑依赖图描述主干阻塞关系，具体启动时机以**任务级依赖**为准。典型示例：M4-1 仅需 M3-4，M3-4 仅需 M0-4，无需等待整个 M3 结束；M3-1/M3-4 仅需 M0-4/M0-5，可在 M2 并行推进时即启动。
+
+---
+
+## 技术债与后续跟踪（Code Review）
+
+> 来源：M0（`milestone-m0-scaffold-bridge`）提交前 code review。记录在 M0 中**有意推迟**的健壮性/架构项，以及它们各自的 gating 里程碑。M0 的退出标准（可编译、可单测、数据模型就位、一次 socket 往返）不被这些项阻塞；但下列项必须在对应里程碑前清掉。
+>
+> 已在 M0 内即时修复（无需跟踪）：client fd 双重 close（`BridgeServer.acceptConnections` 改为由 `defer` 单点释放）；`accept()` 返回负值时对 `EINTR` `continue`、仅在其他错误 break（避免一次被中断的系统调用永久停掉 listener）。
+
+### TD-1 · BridgeServer 阻塞 socket I/O 跑在 Swift 并发协作线程池上
+
+- **问题**：`acceptConnections` 与每连接处理都用 `Task { }` 启动，却调用阻塞的 `Darwin.accept` / `read` / `write`。这些运行在全局协作执行器（线程数 ≈ 核心数）上：accept 循环永久占用一个协作线程，N 个并发阻塞连接再占 N 个，存在执行器饥饿/死锁风险（Swift 6 反模式）。
+- **现状**：M0 测试通过（流量单条串行、核心数充足）。
+- **影响里程碑**：**M3**。M3 让真实 hook 流量进入此路径，且审批往返要阻塞等待用户响应（默认 20s），届时一个阻塞 handler 占住协作线程即为饥饿场景。
+- **建议方案**：accept/读写迁出协作池——改用专用 `DispatchQueue`/`Thread`，或非阻塞 socket + `DispatchSource`/kqueue。
+- **涉及文件**：`VibePetCore/Bridge/BridgeServer.swift`、`VibePetCore/Bridge/BridgeSocketIO.swift`。
+
+### TD-2 · stop() 关停依赖未定义行为，且存在 start/stop 竞态
+
+- **问题**：(a) `stop()` 靠 `close()` 监听 fd 来唤醒阻塞在 `accept()` 的线程，但 Darwin/BSD 上此唤醒行为未定义（与 Linux 不同）；阻塞期间不重新检查 `Task.isCancelled`。(b) `state.install(...)` 在 accept Task 已启动**之后**才执行；若 `stop()` 落在该窗口，会读到 `listenFileDescriptor == -1` 提前返回，泄漏 fd。
+- **现状**：概率低，M0 测试未覆盖该窗口。与 TD-1 同源——迁移到非阻塞 socket 可一并解决 (a)。
+- **影响里程碑**：**M3**（随 TD-1 一并处理）。
+- **建议方案**：非阻塞 accept + 可中断关停；start 时先把 fd 登记进 state 再启动 accept Task（消除竞态窗口）。
+- **涉及文件**：`VibePetCore/Bridge/BridgeServer.swift`（含 `BridgeServerState`）。
+
+### TD-3 · 支持目录权限在两个创建方之间不一致
+
+- **问题**：`SocketPath.prepareDirectory` 把 `~/Library/Application Support/VibePet/` 强制设为 `0700`，但 `ConfigStore.write` 用默认 umask 创建同一目录。谁先跑谁定权限；若 ConfigStore 先写，存放 `bridge.sock` 的目录会停在约 `0755`，直到 `BridgeServer.start` 重新设回 `0700`。
+- **影响里程碑**：**M3**（socket 实际承载流量前，目录须稳定为用户私有 0700）。
+- **建议方案**：抽出统一的「确保 VibePet 支持目录存在且为 0700」工具方法，供 `SocketPath` 与 `ConfigStore` 共用。
+- **涉及文件**：`VibePetCore/Bridge/SocketPath.swift`、`VibePetCore/Persistence/ConfigStore.swift`。
+
+### TD-4 · BridgeClient 无连接/读取超时
+
+- **问题**：`BridgeClient.send` 做阻塞 `readLine` 且无截止时间；若服务端接受连接却永不回复，客户端永久阻塞。
+- **现状**：非 M0 缺口——fail-open 计时（失败 ≤2s `defer`、无响应 ≤20s `defer`）属 M3 CLI 接线。但此「阻塞读且无截止」原语正是 M3 的基础。
+- **影响里程碑**：**M3**（fail-open KPI：CLI 连接失败 ≤2s 内 `defer`；M4 审批无响应 20s 倒计时后 `defer`）。
+- **建议方案**：M3 接线 CLI 时为 `BridgeClient` 增加连接/读取超时（带截止时间或 `select`/`poll`），到点返回 typed error → CLI `defer`。
+- **涉及文件**：`VibePetCore/Bridge/BridgeClient.swift`、`VibePetCore/Bridge/BridgeSocketIO.swift`。
