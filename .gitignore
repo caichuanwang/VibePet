@@ -63,3 +63,6 @@ fastlane/test_output
 
 # Visual brainstorming companion
 .superpowers/
+
+# Local Serena workspace state
+.serena/
