@@ -23,6 +23,10 @@ let package = Package(
         .executable(
             name: "VibePetSetup",
             targets: ["VibePetSetup"]
+        ),
+        .executable(
+            name: "CutoutBenchmark",
+            targets: ["CutoutBenchmark"]
         )
     ],
     targets: [
@@ -44,6 +48,11 @@ let package = Package(
             name: "VibePetSetup",
             dependencies: ["VibePetCore"],
             path: "VibePetSetup"
+        ),
+        .executableTarget(
+            name: "CutoutBenchmark",
+            dependencies: ["VibePetCore"],
+            path: "Tools/CutoutBenchmark/Sources/CutoutBenchmark"
         ),
         .testTarget(
             name: "VibePetCoreTests",
