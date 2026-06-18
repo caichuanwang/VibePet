@@ -83,6 +83,10 @@ public struct PetAssetStore: Sendable {
         .sorted { $0.uuidString < $1.uuidString }
     }
 
+    public func list() throws -> [PetAsset] {
+        try listIDs().compactMap { try read(id: $0) }
+    }
+
     public func delete(id: UUID) throws {
         let petDirectory = directoryURL(for: id)
         guard FileManager.default.fileExists(atPath: petDirectory.path) else {

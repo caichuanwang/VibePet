@@ -46,6 +46,21 @@ final class PetAssetStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: second.primaryImageURL.path))
     }
 
+    func testListReturnsReadableAssetsSortedByID() throws {
+        let directory = try TemporaryPetAssetDirectory()
+        let store = PetAssetStore(applicationSupportRoot: directory.url)
+        let firstID = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+        let secondID = UUID(uuidString: "20000000-0000-0000-0000-000000000002")!
+        let sprite = try makeTestImage()
+
+        _ = try store.write(makeAsset(id: secondID), sprite: sprite)
+        _ = try store.write(makeAsset(id: firstID), sprite: sprite)
+
+        let assets = try store.list()
+
+        XCTAssertEqual(assets.map(\.id), [firstID, secondID])
+    }
+
     func testReadingMissingIDReturnsNil() throws {
         let directory = try TemporaryPetAssetDirectory()
         let store = PetAssetStore(applicationSupportRoot: directory.url)

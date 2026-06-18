@@ -1,7 +1,5 @@
-## Purpose
+## MODIFIED Requirements
 
-Define the UI-independent application configuration model and its on-disk store.
-## Requirements
 ### Requirement: AppConfig model
 
 `VibePetCore` SHALL define an `AppConfig` `Codable` type holding at least: `activePetID`, enabled tools, decision timeout, active generator ID, pet position (within the main screen `visibleFrame`), and an onboarding-completed marker indicating whether first-launch onboarding has finished. The onboarding-completed marker SHALL default to "not completed" so that an existing `config.json` written before this field existed decodes successfully and is treated as not-yet-onboarded.
@@ -15,18 +13,3 @@ Define the UI-independent application configuration model and its on-disk store.
 
 - **WHEN** a legacy `config.json` without the onboarding-completed field is decoded
 - **THEN** decoding succeeds and the onboarding-completed marker is `false` (not yet onboarded)
-
-### Requirement: ConfigStore read/write with defaults
-
-`ConfigStore` SHALL read and write `config.json` under `~/Library/Application Support/VibePet/`, and SHALL return a well-defined default configuration when the file does not exist.
-
-#### Scenario: Missing file yields default config
-
-- **WHEN** `ConfigStore` reads with no `config.json` present
-- **THEN** it returns the default `AppConfig` without throwing
-
-#### Scenario: Write then read round-trips
-
-- **WHEN** a config is written via `ConfigStore` and then read back
-- **THEN** the read value equals the written value
-

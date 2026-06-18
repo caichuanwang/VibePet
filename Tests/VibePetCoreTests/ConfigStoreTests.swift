@@ -19,7 +19,8 @@ final class ConfigStoreTests: XCTestCase {
             enabledTools: [.claudeCode, .codex],
             decisionTimeoutSeconds: 12,
             activeGeneratorID: "remote-cutout",
-            petPosition: PetPosition(x: 144, y: 288, screenWidth: 1728, screenHeight: 1117)
+            petPosition: PetPosition(x: 144, y: 288, screenWidth: 1728, screenHeight: 1117),
+            hasCompletedOnboarding: true
         )
 
         try store.write(config)
@@ -33,12 +34,39 @@ final class ConfigStoreTests: XCTestCase {
             enabledTools: [.codex],
             decisionTimeoutSeconds: 20,
             activeGeneratorID: "local-cutout",
-            petPosition: PetPosition(x: 24, y: 48, screenWidth: 1440, screenHeight: 900)
+            petPosition: PetPosition(x: 24, y: 48, screenWidth: 1440, screenHeight: 900),
+            hasCompletedOnboarding: true
         )
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         XCTAssertEqual(decoded, config)
+        XCTAssertTrue(decoded.hasCompletedOnboarding)
+    }
+
+    func testLegacyAppConfigMissingOnboardingMarkerDecodesAsFalse() throws {
+        let data = """
+        {
+          "activeGeneratorID": "local-cutout",
+          "activePetID": "pet-1",
+          "decisionTimeoutSeconds": 20,
+          "enabledTools": ["codex"],
+          "petPosition": {
+            "screenHeight": 900,
+            "screenWidth": 1440,
+            "x": 24,
+            "y": 48
+          }
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertFalse(decoded.hasCompletedOnboarding)
+    }
+
+    func testDefaultConfigHasNotCompletedOnboarding() {
+        XCTAssertFalse(AppConfig.default.hasCompletedOnboarding)
     }
 
     func testConfigFileLivesUnderVibePetSupportDirectory() {
