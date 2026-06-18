@@ -7,6 +7,26 @@
 
 ---
 
+## 文档体系与阅读指南
+
+本 PRD 与另外两份文档共同构成 VibePet MVP 的完整规格，三者单向依赖：
+
+| 文档 | 核心问题 | 主要内容 |
+|---|---|---|
+| **本文（PRD）** | 做什么、为什么做、用户怎么用 | §1 目标与 KPI · §2 用户故事与验收标准 · §3 能力需求 · §5 路线图 |
+| [技术实现方案](./VibePet-技术实现方案.md) | 怎么做、代码如何组织 | §1 架构 · §2 生成管线 · §3 Bridge 协议 · §4 适配层 · §5 UI · §9 里程碑 · **§10 参考项目使用指南** |
+| [MVP 任务拆解](./VibePet-MVP-任务拆解.md) | 分成哪些可独立提交的 task | M0–M6 全部 task，带验收标准与依赖 |
+
+**三文档的依赖关系**：PRD 的用户故事（US-x）和 KPI 是技术方案里程碑退出标准的来源；技术方案的里程碑（§9）是任务拆解的分组依据。改动应从上游向下游传播（PRD → 技术方案 → 任务拆解）。
+
+**常见查阅路径**：
+- 理解某功能的产品意图 → 本文 §2.2 对应 US-x
+- 了解某功能的技术设计 → 技术方案对应章节（本文 §4 各小节均有 → 指针）
+- 开始实现某 task → 任务拆解对应 M_-_ + 技术方案 §9/Mx + 本文 §2.2 对应 US-x
+- **参考 open-vibe-island** → 技术方案 §10（使用指南）+ §11（版权边界），不直接查其源码
+
+---
+
 ## 1. 执行摘要（Executive Summary）
 
 ### 问题陈述
@@ -159,27 +179,18 @@ VibePet 是一个 macOS 原生桌面宠物应用。用户上传自己宠物或�
 > 完整技术设计见 [《VibePet 技术实现方案》](./VibePet-技术实现方案.md)。此处仅列高层概要。
 
 ### 4.1 架构概览
-采用**方案 A**：单一 Swift Package，拆为四个 target，hook 进程与 App 通过 **Unix domain socket** 通信。
+单一 Swift Package，四个 target（`VibePetCore` 共享库 · `VibePetApp` 宿主 · `VibePetHooks` hook CLI · `VibePetSetup` 安装器），hook 进程与 App 通过 **Unix domain socket** 通信。决策类事件由 CLI 阻塞等待用户在气泡中回传，fail-open 兜底。
 
-- `VibePetApp` —— SwiftUI 桌面宠物 + 菜单栏 + 设置 UI（宿主应用）。
-- `VibePetCore` —— 共享库：数据模型、Bridge 传输、生成管线、持久化、工具适配协议。
-- `VibePetHooks` —— 微型 CLI 二进制，被各工具的 hook 调用，转发事件并（决策类）阻塞等待回传。
-- `VibePetSetup` —— 安装/卸载 CLI，幂等写入工具配置。
-
-数据流（决策类事件）：
-```
-AI 工具 hook 触发 → VibePetHooks CLI（含事件 JSON, stdin）
-  → Unix socket 发送 envelope → VibePetApp BridgeServer
-  → PetController 弹出气泡（允许/拒绝）→ 用户点击
-  → 决策经 socket 回传 CLI → CLI 按工具格式输出 JSON 到 stdout, exit 0
-  → AI 工具据此放行/取消
-```
+> 完整架构图、Target 职责、数据流时序见 [技术方案 §1](./VibePet-技术实现方案.md)。
 
 ### 4.2 集成点
-- **Claude Code**：`~/.claude/settings.json` 注册 `PreToolUse` / `Notification` / `Stop` hooks。
-- **Codex**：`config.toml` 注册 `PermissionRequest` hook 及 `notify` 程序。
-- **进程间通信**：`~/Library/Application Support/VibePet/bridge.sock`（目录 0700，套接字 0600）。
-- **本地文件**：宠物素材与配置存于 `~/Library/Application Support/VibePet/`。
+MVP 仅支持 Claude Code 与 Codex 两个工具（适配层抽象好，后续扩展零侵入）：
+
+- **Claude Code**：注册 `PreToolUse` / `Notification` / `Stop` hooks，全四种气泡态均可用。
+- **Codex**：注册 `PermissionRequest` hook + `notify` 程序，提问态降级为"回终端处理"。
+- **IPC**：Unix domain socket，路径固定在 `~/Library/Application Support/VibePet/`，与 App 安装位置解耦。
+
+> hook 注册格式、配置文件路径、安装器 manifest 细节见 [技术方案 §4](./VibePet-技术实现方案.md)。
 
 ### 4.3 安全与隐私
 - **纯本地优先**：MVP 抠图全程在设备端，照片永不离开本机。

@@ -753,12 +753,52 @@ M0 脚手架 + Bridge 模型
 
 ---
 
-## 10. 参考
-- open-vibe-island（架构参考，SwiftUI + Unix socket bridge + hook CLI）：https://github.com/Octane0411/open-vibe-island
-- Apple Vision `VNGenerateForegroundInstanceMaskRequest`（本地主体抠图，macOS 14+）。
-- Claude Code Hooks（`PreToolUse` 的 `permissionDecision`）：https://code.claude.com/docs/en/hooks-guide
-- Codex Hooks（`PermissionRequest` 生命周期 hook）：https://developers.openai.com/codex/hooks
-- 未来生成器：TripoSR（MIT，单图快速 3D）、Hunyuan3D（高保真）。
+## 10. 参考项目使用指南
+
+### 10.1 open-vibe-island（架构参考，GPL-3.0）
+
+**项目地址**：https://github.com/Octane0411/open-vibe-island
+
+**项目做了什么**：open-vibe-island 是 macOS 上类似 VibePet 的开发者桌面助手。其核心与 VibePet 高度重合：一个被 AI 工具 hook 调用的轻量 CLI 二进制，通过 Unix domain socket 把工具事件转发给宿主 App（SwiftUI），对决策类事件阻塞等待气泡回传；宿主 App 侧有 socket 服务器 + 数据驱动的气泡 UI；安装器负责把 CLI 二进制拷贝到稳定路径并幂等写入工具配置。这条技术路线的可行性与低延迟已在该项目中得到验证。
+
+**哪些思路可以参考**（思想/架构模式不受版权保护）：
+
+| 模块 / 思路 | 参考价值 | VibePet 对应 |
+|---|---|---|
+| hook CLI → Unix socket → App 通信架构 | 验证此路线在 macOS 上可行且延迟满足 ≤500ms | §1、§3 |
+| 安装时把 hook 二进制拷到 `Application Support/bin/` | 解决 hook 路径随 .app 移动/重命名失效的问题 | §1.2 |
+| manifest 文件驱动安装 / 卸载状态追踪 | 比字符串猜测更可靠的幂等安装与精确卸载 | §4.3 |
+| 气泡内只放摘要，不内嵌完整 diff（克制原则） | 小气泡塞 diff 体验差；重细节交给"跳回终端" | §5.3 |
+| 规范事件 + 数据驱动渲染（adapter 模式） | 新增工具只需新增 adapter，渲染层零改动 | §3.2、§4 |
+| install / uninstall / status 三件套对称设计 | 安装行为可预期、可逆、可查 | §4.3 |
+
+**何时优先查阅 open-vibe-island**（先查、再凭官方 API 独立实现）：
+- 遇到 **Unix socket 在 macOS 上如何稳定收发 newline-delimited JSON** 的实现疑问。
+- 遇到 **hook CLI 在 App 未运行时如何快速 fail-open**（连接超时策略）的实现疑问。
+- 遇到 **安装器如何幂等写入 `settings.json` / `config.toml`、如何精确卸载**（只删自己写的条目）的实现疑问。
+- 遇到 **气泡 UI 如何跟随窗口边缘锚定、尾巴指向宠物**的布局实现疑问。
+- 总之：**架构可行性印证**类疑问 → 查 open-vibe-island 验证方向；然后凭官方文档与自有 fixture 独立编写，不照抄代码。
+- 我们的项目简单来说就是在重写 open-vibe-island 的基础上增加一个宠物，所有有关 vibe-island 的内容都可以参考
+
+**不应做的事（版权边界，详见 §11）**：
+- 不以"open-island 这么写的"作为实现证据；每个涉及 hook/adapter/安装器的 PR 必须附官方文档链接或自有 fixture。
+- 高风险模块（adapter、安装器、socket 协议）优先由未深入阅读过其源码的人复核 diff。
+
+### 10.2 官方 API 参考（实现直接依据）
+
+> 这些是每个实现 task 的**第一手依据**，优先级高于 open-vibe-island。
+
+| 能力 | 文档 |
+|---|---|
+| Apple Vision 主体抠图（`VNGenerateForegroundInstanceMaskRequest`，macOS 14+） | Xcode 内置文档 / WWDC 2023 "Lift subjects from images in your app" |
+| Claude Code Hooks（`PreToolUse` 的 `permissionDecision`、`updatedInput`） | https://code.claude.com/docs/en/hooks-guide |
+| Codex Hooks（`PermissionRequest` 生命周期 hook、`notify` 程序） | https://developers.openai.com/codex/hooks |
+| macOS 浮动透明窗口、NSStatusItem | Apple Developer Documentation |
+
+### 10.3 未来生成器参考（v1.1 / v2.0，MVP 不实现）
+- **TripoSR**（MIT）：单图快速 3D 生成，v2.0 备选。
+- **Hunyuan3D**：高保真 3D，部分权重为**非商用**，接入前须单独核查许可证。
+- **云端 img2img**（v1.1）：接口在 `CloudStylizeGenerator` 占位，需用户显式开启并自带 API key。
 
 ---
 
