@@ -710,7 +710,7 @@ M0 脚手架 + Bridge 模型
   - 工具触发到气泡出现 ≤ 500ms。
   - App 未运行/连接失败 → CLI ≤ 2s `defer` fail-open；用户未响应 → 默认 20s 倒计时后 `defer`，成功率 100%（§8.3）。
   - `deny` 路径可靠；`allow` 尽力而为并按 §7 处理已知 bug。
-- **依赖**：M3。
+- **依赖**：M3（M4-7 队列堆叠与 M4-8 Demo 并行推进，不阻塞 Demo 验收）。
 
 ### M5 · 提问闭环（`AskUserQuestion`）
 
