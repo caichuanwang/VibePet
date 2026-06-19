@@ -1,0 +1,56 @@
+/// Pure state machine behind the desktop pet (technical design §5.2). M3 covers
+/// `idle` / `greet` / `notify`; the `decide` state for response-bearing
+/// `approval` / `question` content lands in M4. Kept UI-independent in
+/// `VibePetCore` so the transitions are unit testable.
+public struct PetStateMachine: Equatable, Sendable {
+    public enum State: Equatable, Sendable {
+        case idle
+        case greet
+        case notify
+    }
+
+    public private(set) var state: State
+
+    public init(state: State = .idle) {
+        self.state = state
+    }
+
+    /// Plays the greeting (startup / daily first run).
+    public mutating func greet() {
+        state = .greet
+    }
+
+    /// Called when the greeting animation completes, returning the pet to its
+    /// idle resting state. Greeting is transient: unlike a notification it has no
+    /// bubble to dismiss, so the controller schedules this after `greetDuration`.
+    /// No-op if the state already moved on (e.g. a notification arrived mid-greet).
+    public mutating func greetFinished() {
+        if state == .greet {
+            state = .idle
+        }
+    }
+
+    /// Routes incoming bubble content. Returns `true` when the content was
+    /// accepted into a non-interactive `notify` bubble; response-bearing content
+    /// (`approval` / `question`) is not handled in this milestone and leaves the
+    /// state unchanged.
+    @discardableResult
+    public mutating func receive(_ content: BubbleContent) -> Bool {
+        guard !content.needsResponse else {
+            return false
+        }
+        state = .notify
+        return true
+    }
+
+    /// Called when the active greeting / notify bubble dismisses, returning the
+    /// pet to its idle resting state.
+    public mutating func bubbleDismissed() {
+        switch state {
+        case .greet, .notify:
+            state = .idle
+        case .idle:
+            break
+        }
+    }
+}

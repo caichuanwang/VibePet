@@ -14,6 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var petVisible = false
 
+    private let petWindowSurface = PetWindowSurface()
+    private lazy var petController = PetController(surface: petWindowSurface)
+    private var bridgeHost: BridgeServerHost?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
 
@@ -24,7 +28,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             presentOnboarding()
         }
 
+        startBridge()
+
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        bridgeHost?.stop()
+    }
+
+    // MARK: - Bridge
+
+    /// Starts the notification bridge so hook events surface as pet bubbles via
+    /// `PetController`. The controller anchors bubbles to wherever the (visible)
+    /// pet currently sits through `PetWindowSurface`; when hidden, the event drops.
+    private func startBridge() {
+        let host = BridgeServerHost(petController: petController)
+        bridgeHost = host
+        host.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -70,24 +91,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         let controller = petWindowController ?? PetWindowController(frame: frame, configStore: configStore)
-        let asset = activeAsset(config: config)
         controller.setFrame(frame, display: true, animate: false)
-        controller.setContent(PetView(asset: asset, activity: greet ? .greeting : .idle))
-        controller.setHitSprite(asset.flatMap { ImageLoading.cgImage(at: $0.primaryImageURL) })
         controller.showWindow(nil)
         petWindowController = controller
         petVisible = true
+
+        // PetController is the single source of truth for sprite + state; the
+        // surface renders into this window.
+        petWindowSurface.bind(windowController: controller)
+        petWindowSurface.setPetVisible(true)
+        petController.setActiveAsset(activeAsset(config: config))
+        if greet {
+            petController.greet()
+        }
     }
 
     private func refreshPet() {
         let config = (try? configStore.read()) ?? .default
-        guard let controller = petWindowController else {
+        guard petWindowController != nil else {
             showPet(config: config, greet: false)
             return
         }
-        let asset = activeAsset(config: config)
-        controller.setContent(PetView(asset: asset, activity: .idle))
-        controller.setHitSprite(asset.flatMap { ImageLoading.cgImage(at: $0.primaryImageURL) })
+        petController.setActiveAsset(activeAsset(config: config))
         statusItemController?.rebuild()
     }
 
@@ -102,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.orderFront(nil)
         }
         petVisible.toggle()
+        petWindowSurface.setPetVisible(petVisible)
     }
 
     private func switchPet(to id: String) {

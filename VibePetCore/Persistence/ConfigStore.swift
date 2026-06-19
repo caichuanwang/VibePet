@@ -3,14 +3,14 @@ import Foundation
 public struct ConfigStore: Sendable {
     public let configURL: URL
 
+    private let applicationSupportRoot: URL?
     private let supportDirectoryURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
     public init(applicationSupportRoot: URL? = nil) {
-        let root = applicationSupportRoot ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support", isDirectory: true)
-        supportDirectoryURL = root.appendingPathComponent("VibePet", isDirectory: true)
+        self.applicationSupportRoot = applicationSupportRoot
+        supportDirectoryURL = SupportDirectory.url(applicationSupportRoot: applicationSupportRoot)
         configURL = supportDirectoryURL.appendingPathComponent("config.json", isDirectory: false)
 
         let encoder = JSONEncoder()
@@ -29,10 +29,7 @@ public struct ConfigStore: Sendable {
     }
 
     public func write(_ config: AppConfig) throws {
-        try FileManager.default.createDirectory(
-            at: supportDirectoryURL,
-            withIntermediateDirectories: true
-        )
+        try SupportDirectory.ensure(applicationSupportRoot: applicationSupportRoot)
         let data = try encoder.encode(config)
         try data.write(to: configURL, options: [.atomic])
     }

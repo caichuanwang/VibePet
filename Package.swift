@@ -58,6 +58,19 @@ let package = Package(
             name: "VibePetCoreTests",
             dependencies: ["VibePetCore"],
             path: "Tests/VibePetCoreTests"
+        ),
+        .testTarget(
+            name: "VibePetE2ETests",
+            // Depends on the VibePetHooks executable so `swift test` builds the real
+            // CLI binary; the subprocess test exercises its actual process entry
+            // point (main.swift wiring), which in-process tests cannot cover.
+            dependencies: ["VibePetCore", "VibePetHooks"],
+            path: "Tests/E2E"
+        ),
+        .testTarget(
+            name: "VibePetAppTests",
+            dependencies: ["VibePetApp", "VibePetCore"],
+            path: "Tests/VibePetAppTests"
         )
     ]
 )

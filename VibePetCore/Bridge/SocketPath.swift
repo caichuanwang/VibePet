@@ -13,7 +13,7 @@ public struct SocketPath: Equatable, Sendable {
     }
 
     public var supportDirectoryURL: URL {
-        applicationSupportRoot.appendingPathComponent("VibePet", isDirectory: true)
+        SupportDirectory.url(applicationSupportRoot: applicationSupportRoot)
     }
 
     public var socketURL: URL {
@@ -22,12 +22,7 @@ public struct SocketPath: Equatable, Sendable {
 
     @discardableResult
     public func prepareDirectory() throws -> URL {
-        try FileManager.default.createDirectory(
-            at: supportDirectoryURL,
-            withIntermediateDirectories: true
-        )
-        try setPermissions(0o700, at: supportDirectoryURL)
-        return supportDirectoryURL
+        try SupportDirectory.ensure(applicationSupportRoot: applicationSupportRoot)
     }
 
     public func removeStaleSocket() throws {

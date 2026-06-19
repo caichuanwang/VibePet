@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add a test for the parser"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"我新增了 3 个测试，全部通过 ✅"}]}}
