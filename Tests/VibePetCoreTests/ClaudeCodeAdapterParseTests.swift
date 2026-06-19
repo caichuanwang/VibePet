@@ -112,9 +112,10 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
     // MARK: - Out-of-scope events
 
     func testUnhandledEventReturnsNil() throws {
+        // PreToolUse is now handled (M4); an unrelated event still returns nil.
         let adapter = ClaudeCodeAdapter()
-        let preToolUse = try json(["hook_event_name": "PreToolUse", "tool_name": "Bash"])
-        XCTAssertNil(try adapter.parseEvent(stdin: preToolUse, env: [:]))
+        let unrelated = try json(["hook_event_name": "SessionStart"])
+        XCTAssertNil(try adapter.parseEvent(stdin: unrelated, env: [:]))
     }
 
     func testMalformedInputReturnsNil() throws {

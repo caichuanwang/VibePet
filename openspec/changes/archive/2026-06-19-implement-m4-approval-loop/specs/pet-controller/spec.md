@@ -1,7 +1,5 @@
-## Purpose
+## MODIFIED Requirements
 
-Define the `PetController` state machine and the `BridgeServerHost` routing that drives pet behavior and bubble presentation from received bridge envelopes.
-## Requirements
 ### Requirement: Pet state machine for idle, greet, and notify
 
 `VibePetApp` SHALL define a `PetController` driving a state machine over `idle`, `greet`, `notify`, and `decide` states per the technical design §5.2. `idle` plays breathing/idle animation; `greet` plays the greeting; `notify` shows a non-interactive bubble carrying `completion` / `status`; `decide` highlights the pet for attention and shows an interactive approval bubble for response-requiring content (`approval` in this milestone; `question` in M5).
@@ -21,19 +19,7 @@ Define the `PetController` state machine and the `BridgeServerHost` routing that
 - **WHEN** `PetController` receives content whose `needsResponse` is `true` (an `.approval`)
 - **THEN** it transitions to `decide`, highlights the pet, and presents the interactive approval bubble
 
-### Requirement: Bridge server routes envelopes to the pet controller
-
-`VibePetApp` SHALL run a `BridgeServer` via a `BridgeServerHost` on launch, and SHALL route each received `BridgeEnvelope` to the `PetController` on the main actor so bubble presentation is driven by `BubbleContent`.
-
-#### Scenario: Server starts on app launch
-
-- **WHEN** the App launches
-- **THEN** `BridgeServerHost` starts a `BridgeServer` listening on the bridge socket
-
-#### Scenario: Received envelope reaches the controller
-
-- **WHEN** the running `BridgeServer` receives a notification envelope from a client
-- **THEN** `BridgeServerHost` forwards it to `PetController`, which presents the matching bubble
+## ADDED Requirements
 
 ### Requirement: Approval response round-trip with requestId pairing
 
@@ -58,4 +44,3 @@ Define the `PetController` state machine and the `BridgeServerHost` routing that
 
 - **WHEN** one connection is blocked awaiting a user decision
 - **THEN** the accept loop and other in-flight connections continue to be served
-

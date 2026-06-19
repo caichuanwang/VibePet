@@ -45,18 +45,87 @@ final class HookRuntimeTests: XCTestCase {
         XCTAssertTrue(sent.isEmpty)
     }
 
-    func testResponseBearingEnvelopeIsNotSentInThisMilestone() async throws {
+    func testResponseBearingEnvelopeIsNotSentAsNotification() async throws {
+        // Approval must NOT go through the one-way notification path.
         let recorder = EnvelopeRecorder()
         let stub = StubAdapter(result: .success(approvalEnvelope))
         let runtime = HookRuntime(adapter: stub, sendNotification: { envelope in
             await recorder.record(envelope)
         })
 
-        let outcome = await runtime.run(stdin: Data("{}".utf8), env: [:])
+        _ = await runtime.run(stdin: Data("{}".utf8), env: [:])
+
+        let sent = await recorder.envelopes
+        XCTAssertTrue(sent.isEmpty, "approval must not be sent as a notification")
+    }
+
+    // MARK: - Decision round trip (M4-4)
+
+    func testDecisionPathEncodesResponse() async throws {
+        let adapter = ClaudeCodeAdapter()
+        let runtime = HookRuntime(
+            adapter: adapter,
+            sendNotification: { _ in XCTFail("decision must not use the notification path") },
+            sendDecision: { envelope in
+                BridgeResponseEnvelope(requestId: envelope.requestId, response: .approval(.deny(reason: "no")))
+            }
+        )
+
+        let outcome = await runtime.run(stdin: try bashPreToolUse(), env: [:])
+
+        guard case let .responded(data) = outcome else {
+            return XCTFail("Expected .responded, got \(outcome)")
+        }
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let output = try XCTUnwrap(object["hookSpecificOutput"] as? [String: Any])
+        XCTAssertEqual(output["permissionDecision"] as? String, "deny")
+        XCTAssertEqual(output["permissionDecisionReason"] as? String, "no")
+    }
+
+    func testDecisionDeferResponseProducesNoOutput() async throws {
+        let runtime = HookRuntime(
+            adapter: ClaudeCodeAdapter(),
+            sendNotification: { _ in },
+            sendDecision: { envelope in
+                BridgeResponseEnvelope(requestId: envelope.requestId, response: .defer)
+            }
+        )
+
+        let outcome = await runtime.run(stdin: try bashPreToolUse(), env: [:])
+
+        guard case let .responded(data) = outcome else {
+            return XCTFail("Expected .responded, got \(outcome)")
+        }
+        XCTAssertTrue(data.isEmpty, "a defer response writes nothing to stdout")
+    }
+
+    func testDecisionSendFailureDefers() async throws {
+        let runtime = HookRuntime(
+            adapter: ClaudeCodeAdapter(),
+            sendNotification: { _ in },
+            sendDecision: { _ in throw StubError() }
+        )
+
+        let outcome = await runtime.run(stdin: try bashPreToolUse(), env: [:])
 
         XCTAssertEqual(outcome, .deferred)
-        let sent = await recorder.envelopes
-        XCTAssertTrue(sent.isEmpty)
+    }
+
+    func testDecisionWithNoInjectedSenderDefers() async throws {
+        // Default decision sender throws → fail open rather than crash.
+        let runtime = HookRuntime(adapter: ClaudeCodeAdapter(), sendNotification: { _ in })
+        let outcome = await runtime.run(stdin: try bashPreToolUse(), env: [:])
+        XCTAssertEqual(outcome, .deferred)
+    }
+
+    private func bashPreToolUse() throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "PreToolUse",
+            "session_id": "a1b2c3d4",
+            "cwd": "/tmp/proj",
+            "tool_name": "Bash",
+            "tool_input": ["command": "ls"],
+        ])
     }
 
     func testSendFailureDefers() async throws {

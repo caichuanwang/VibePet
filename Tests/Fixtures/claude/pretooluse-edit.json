@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "a1b2c3d4e5f6",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/Users/dev/Projects/VibePet/README.md",
+    "old_string": "line one\nline two",
+    "new_string": "line one\nline two\nline three\nline four"
+  }
+}

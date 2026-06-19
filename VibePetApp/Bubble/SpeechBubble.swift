@@ -157,8 +157,9 @@ struct SpeechBubble: View {
     }
 }
 
-/// A rounded rectangle with a triangular tail on the pet-facing edge.
-private struct BubbleShape: Shape {
+/// A rounded rectangle with a triangular tail on the pet-facing edge. Shared by
+/// `SpeechBubble` and `ApprovalCard`.
+struct BubbleShape: Shape {
     let cornerRadius: CGFloat
     let tailEdge: SpeechBubble.TailEdge
     let tailOffsetX: CGFloat

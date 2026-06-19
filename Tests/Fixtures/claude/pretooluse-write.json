@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "a1b2c3d4e5f6",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/Users/dev/Projects/VibePet/NOTES.md",
+    "content": "alpha\nbeta\ngamma"
+  }
+}

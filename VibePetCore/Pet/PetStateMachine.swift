@@ -1,12 +1,13 @@
-/// Pure state machine behind the desktop pet (technical design §5.2). M3 covers
-/// `idle` / `greet` / `notify`; the `decide` state for response-bearing
-/// `approval` / `question` content lands in M4. Kept UI-independent in
+/// Pure state machine behind the desktop pet (technical design §5.2). Covers
+/// `idle` / `greet` / `notify` plus the `decide` state for response-bearing
+/// `approval` content (M4; `question` joins in M5). Kept UI-independent in
 /// `VibePetCore` so the transitions are unit testable.
 public struct PetStateMachine: Equatable, Sendable {
     public enum State: Equatable, Sendable {
         case idle
         case greet
         case notify
+        case decide
     }
 
     public private(set) var state: State
@@ -30,10 +31,10 @@ public struct PetStateMachine: Equatable, Sendable {
         }
     }
 
-    /// Routes incoming bubble content. Returns `true` when the content was
-    /// accepted into a non-interactive `notify` bubble; response-bearing content
-    /// (`approval` / `question`) is not handled in this milestone and leaves the
-    /// state unchanged.
+    /// Routes incoming bubble content into a non-interactive `notify` bubble.
+    /// Returns `true` when accepted; response-bearing content (`approval` /
+    /// `question`) is NOT a notification and is routed via `beginDecision()`
+    /// instead, leaving the state unchanged here.
     @discardableResult
     public mutating func receive(_ content: BubbleContent) -> Bool {
         guard !content.needsResponse else {
@@ -43,11 +44,18 @@ public struct PetStateMachine: Equatable, Sendable {
         return true
     }
 
-    /// Called when the active greeting / notify bubble dismisses, returning the
-    /// pet to its idle resting state.
+    /// Enters the interactive `decide` state for response-bearing `approval`
+    /// content. The pet highlights for attention while the approval bubble awaits
+    /// a user decision.
+    public mutating func beginDecision() {
+        state = .decide
+    }
+
+    /// Called when the active greeting / notify / decide bubble dismisses,
+    /// returning the pet to its idle resting state.
     public mutating func bubbleDismissed() {
         switch state {
-        case .greet, .notify:
+        case .greet, .notify, .decide:
             state = .idle
         case .idle:
             break

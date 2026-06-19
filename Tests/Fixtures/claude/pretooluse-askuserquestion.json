@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "a1b2c3d4e5f6",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      { "question": "Pick an option:", "type": "multiple_choice", "options": ["A", "B"] }
+    ]
+  }
+}

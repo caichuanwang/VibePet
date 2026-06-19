@@ -15,7 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var petVisible = false
 
     private let petWindowSurface = PetWindowSurface()
-    private lazy var petController = PetController(surface: petWindowSurface)
+    private lazy var petController = PetController(
+        surface: petWindowSurface,
+        decisionTimeout: ((try? configStore.read()) ?? .default).decisionTimeoutSeconds
+    )
     private var bridgeHost: BridgeServerHost?
 
     func applicationDidFinishLaunching(_ notification: Notification) {

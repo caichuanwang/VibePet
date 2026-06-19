@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// What the pet is currently doing. M2 only models the `idle`/`greet` subset of
-/// the full PetController state machine (technical design §5.2); `notify`/`decide`
-/// arrive with the bubble work in M3/M4.
+/// What the pet is currently doing (technical design §5.2). `deciding` highlights
+/// the pet for attention while an approval bubble awaits a user decision (M4).
 enum PetActivity: Equatable, Sendable {
     case idle
     case greeting
+    case deciding
 }
 
 /// Centralised animation tuning so motion stays consistent and easy to retheme.

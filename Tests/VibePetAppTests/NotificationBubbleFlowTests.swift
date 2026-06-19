@@ -84,6 +84,150 @@ final class NotificationBubbleFlowTests: XCTestCase {
         }
     }
 
+    // MARK: - Approval (decide) — M4-5 / M4-6
+
+    func testApprovalEntersDecideAndPresentsCard() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+
+        let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+
+        XCTAssertEqual(controller.state, .decide)
+        XCTAssertEqual(surface.lastActivity, .deciding)
+
+        surface.fireDecision(.approval(.allowOnce))
+        _ = await task.value
+    }
+
+    func testDenyResolvesWithPairedDenyAndReturnsToIdle() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+
+        let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+        surface.fireDecision(.approval(.deny(reason: "no")))
+
+        let response = await task.value
+        XCTAssertEqual(response, .approval(.deny(reason: "no")))
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(surface.approvalDismissCount, 1)
+    }
+
+    func testAllowOnceResolves() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+
+        let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+        surface.fireDecision(.approval(.allowOnce))
+
+        let response = await task.value
+        XCTAssertEqual(response, .approval(.allowOnce))
+    }
+
+    func testUnansweredApprovalTimesOutToDefer() async {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 0.05)
+
+        let response = await controller.requestDecision(for: approvalEnvelope())
+
+        XCTAssertEqual(response, .defer)
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testHiddenPetFailsOpen() async {
+        let surface = FakePetSurface()
+        surface.petFrame = nil
+        let controller = PetController(surface: surface)
+
+        let response = await controller.requestDecision(for: approvalEnvelope())
+
+        XCTAssertEqual(response, .defer)
+        XCTAssertTrue(surface.presentedApprovals.isEmpty)
+    }
+
+    func testConcurrentApprovalsQueueFIFOAndPairIndependently() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let envA = approvalEnvelope(command: "A")
+        let envB = approvalEnvelope(command: "B")
+
+        let taskA = Task { await controller.requestDecision(for: envA) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+
+        let taskB = Task { await controller.requestDecision(for: envB) }
+        try await waitUntil { controller.pendingDecisionCount == 1 }
+        XCTAssertEqual(surface.lastPendingCount, 1, "queued approval bumps the pending badge")
+
+        // Resolve A; B should then present.
+        surface.fireDecision(.approval(.allowOnce))
+        let responseA = await taskA.value
+        XCTAssertEqual(responseA, .approval(.allowOnce))
+
+        try await waitUntil { surface.presentedApprovals.count == 2 }
+        surface.fireDecision(.approval(.deny(reason: nil)))
+        let responseB = await taskB.value
+        XCTAssertEqual(responseB, .approval(.deny(reason: nil)))
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    func testNotificationDuringDecideDoesNotClobberApproval() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+
+        let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+
+        controller.handle(completionEnvelope()) // notification arrives mid-decision
+        controller.handle(completionEnvelope()) // and another
+
+        XCTAssertTrue(surface.presentedBubbles.isEmpty, "decide has priority over notify")
+        XCTAssertEqual(surface.notificationBadge, 2, "deferred notifications accumulate a badge")
+        XCTAssertEqual(controller.state, .decide)
+
+        surface.fireDecision(.approval(.allowOnce))
+        _ = await task.value
+        XCTAssertEqual(surface.notificationBadge, 0, "badge clears once the queue drains")
+    }
+
+    func testApprovalRoundTripPairsRequestIdViaHost() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        let envelope = approvalEnvelope()
+        let client = BridgeClient(socketPath: socketPath, readTimeout: 5)
+        async let responseEnv = client.send(envelope)
+
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+        surface.fireDecision(.approval(.deny(reason: "blocked")))
+
+        let result = try await responseEnv
+        XCTAssertEqual(result.requestId, envelope.requestId, "response must pair the request by id")
+        XCTAssertEqual(result.response, .approval(.deny(reason: "blocked")))
+    }
+
+    private func approvalEnvelope(command: String = "swift test") -> BridgeEnvelope {
+        BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(tool: .claudeCode, projectName: "VibePet", sessionShortId: "a1b2c3", cwd: "/tmp/VibePet"),
+            content: .approval(ApprovalContent(
+                title: "运行命令",
+                risk: .medium,
+                preview: .command(text: command),
+                alwaysAllow: nil,
+                requiresTerminalApproval: false
+            ))
+        )
+    }
+
     // MARK: - Helpers
 
     private func completionEnvelope() -> BridgeEnvelope {
@@ -112,6 +256,13 @@ private final class FakePetSurface: PetSurface {
         let placement: BubbleAnchor.Placement
     }
 
+    struct PresentedApproval {
+        let content: ApprovalContent
+        let source: SourceInfo
+        let timeout: TimeInterval
+        let pendingCount: Int
+    }
+
     var petFrame: CGRect? = CGRect(x: 800, y: 0, width: 120, height: 120)
     var visibleFrame: CGRect = CGRect(x: 0, y: 0, width: 1000, height: 800)
 
@@ -119,6 +270,11 @@ private final class FakePetSurface: PetSurface {
     private(set) var presentedBubbles: [PresentedBubble] = []
     private(set) var dismissCount = 0
     private var onDismiss: (() -> Void)?
+
+    private(set) var presentedApprovals: [PresentedApproval] = []
+    private(set) var approvalDismissCount = 0
+    private(set) var lastPendingCount = 0
+    private var onDecision: ((BridgeResponse) -> Void)?
 
     func renderPet(asset: PetAsset?, activity: PetActivity) {
         lastActivity = activity
@@ -140,6 +296,39 @@ private final class FakePetSurface: PetSurface {
 
     func fireDismiss() {
         onDismiss?()
+    }
+
+    func presentApproval(
+        content: ApprovalContent,
+        source: SourceInfo,
+        placement: BubbleAnchor.Placement,
+        timeout: TimeInterval,
+        pendingCount: Int,
+        onDecision: @escaping (BridgeResponse) -> Void
+    ) {
+        presentedApprovals.append(
+            PresentedApproval(content: content, source: source, timeout: timeout, pendingCount: pendingCount)
+        )
+        lastPendingCount = pendingCount
+        self.onDecision = onDecision
+    }
+
+    func updatePendingCount(_ count: Int) {
+        lastPendingCount = count
+    }
+
+    func dismissApproval() {
+        approvalDismissCount += 1
+    }
+
+    private(set) var notificationBadge = 0
+
+    func updateNotificationBadge(_ count: Int) {
+        notificationBadge = count
+    }
+
+    func fireDecision(_ response: BridgeResponse) {
+        onDecision?(response)
     }
 }
 
