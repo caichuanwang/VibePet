@@ -1,0 +1,4 @@
+# Project-local Codex defaults for VibePet.
+# Requires the project to be trusted before Codex loads this file.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
