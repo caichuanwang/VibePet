@@ -1,0 +1,8 @@
+{
+  "type": "agent-turn-complete",
+  "turn-id": "turn_99",
+  "thread-id": "c0ffee123456",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "input-messages": ["Run the tests"],
+  "last-assistant-message": "All 42 tests passed."
+}

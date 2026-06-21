@@ -280,8 +280,9 @@ public enum ApprovalDecision: Codable, Sendable {
 }
 
 public struct QuestionAnswer: Codable, Sendable {
-    public let answers: [String: String]       // header → 选中项（多选用 JSON 数组串）
-    public let freeform: [String: String]      // header → 自由文本（allowsFreeform 时）
+    // header → 单值字符串：单选=label；多选=label 以 ", " 连接；
+    // freeform("其他")=用户文本顶替 label（对齐 Claude Code CLI / Open Island，无独立 freeform/annotations 通道）
+    public let answers: [String: String]
 }
 ```
 
@@ -335,7 +336,8 @@ public protocol ToolAdapter: Sendable {
 - `approval.deny` → `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"<原因>"}}`。`deny` 任何权限模式下都生效，可靠。
 - `approval.allowOnce` → `permissionDecision:"allow"`。**注意**：特定版本存在 `allow` 不抑制原生弹窗的已知 bug，作尽力而为。
 - `approval.allowAlways` → `allow` + 写入会话/持久权限规则（`scopeHint`=tool_name）。该能力必须先经 schema spike 验证；未验证通过时 adapter 不生成 `alwaysAllow`，UI 不显示"始终允许"。
-- `question` → **关键机制**：返回 `permissionDecision:"allow"` 且带 `updatedInput`，把用户答案预填进 AskUserQuestion 的 `answers`/`annotations` 字段 → 工具拿到已填输入，**不再弹原生提问**（纯 hook，无需注入按键）。该 schema 必须以当前 Claude Code 官方事件样例/本机实测样例固化为 fixture；未验证通过时降级为 `.status` 提醒 + 回终端处理。
+- `question` → **关键机制**：返回 `permissionDecision:"allow"` 且带 `updatedInput`，把用户答案预填进 AskUserQuestion 的 `answers` 字段（按 question text 归集）→ 工具拿到已填输入，**不再弹原生提问**（纯 hook，无需注入按键）。该 schema 以当前 Claude Code 官方事件样例固化为 fixture；未验证通过时降级为 `.status` 提醒 + 回终端处理。
+  > 📌 **M5-0 spike 结论（2026-06-20）：机制受支持，Claude Code ≥ 2.1.85。** 官方 changelog："PreToolUse hooks can now satisfy `AskUserQuestion` by returning `updatedInput` alongside `permissionDecision: "allow"`."。**答案格式**（据官方 Agent SDK user-input 文档 + 同源开源实现 Open Island 核实）：`answers` 按 question text 归集，单选=label、**多选="pass an array of labels or join them with `", "`"**（本实现用 `", "` 连接）、freeform "Other" 用**用户文本作为答案值**（*"custom text as the answer value"*，**无需 `annotations` 输出**）；CLI 对每题客户端追加 "Other"，本实现镜像为每题追加合成"其他"选项、回写时从 `updatedInput.questions` 剔除。注意 `updatedInput` 整体替换输入，须保留原 `questions`。已知版本 bug：[#15897](https://github.com/anthropics/claude-code/issues/15897)（多 hook 时 `updatedInput` 被忽略）、[#52822](https://github.com/anthropics/claude-code/issues/52822)（v2.1.119 回归仍弹原生）——靠 fail-open 倒计时兜底。详见 `Tests/Fixtures/claude/m5-question-spike-notes.md`。
 - `defer` → 不输出 JSON，`exit 0`，回退原生流程。
 - **注册位置**：`~/.claude/settings.json` 的 `hooks.PreToolUse` / `hooks.Stop` / `hooks.Notification`，command 指向稳定拷贝路径 `~/Library/Application Support/VibePet/bin/VibePetHooks`（见 §1.2，不引用 `.app` 包内路径）。
 
@@ -520,7 +522,7 @@ public protocol ToolAdapter: Sendable {
 
 - 单选用单选圈、`multiSelect=true` 用复选框；选项展示 `label` + 次行灰字 `detail`。
 - `allowsFreeform=true` 的选项选中后展开文本框。
-- 提交（`⌘↩`）→ 回传 `QuestionAnswer`（`answers`/`freeform` 按 `header` 归集）；schema spike 通过时 adapter 经 `updatedInput` 预填回 AskUserQuestion（见 §4.1），未通过时降级为提醒 + 回终端处理。
+- 提交（`⌘↩`）→ 回传 `QuestionAnswer`（`answers` 按 `header` 归集为单值字符串，freeform 文本内联进值）；schema spike 通过时 adapter 经 `updatedInput` 预填回 AskUserQuestion（见 §4.1），未通过时降级为提醒 + 回终端处理。
 - 倒计时到点同样 fail-open `defer`（回退工具原生提问）。
 - **Codex 无此卡**：其提问降级为审批卡的 `requiresTerminalApproval` 形态（见 §4.2）。
 

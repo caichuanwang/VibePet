@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/user-codex-hook" } ] }
+    ]
+  }
+}

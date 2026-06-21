@@ -105,11 +105,14 @@ public enum ApprovalDecision: Codable, Equatable, Sendable {
 }
 
 public struct QuestionAnswer: Codable, Equatable, Sendable {
+    /// One value per answered question, keyed by `QuestionItem.header`. Single-select
+    /// is the chosen label; multi-select is the chosen labels joined with `", "`; a
+    /// freeform ("其他") choice contributes the user's typed text in place of its
+    /// label (matching how Claude Code's CLI inlines free text into the answer value
+    /// — there is no separate freeform/annotations channel).
     public let answers: [String: String]
-    public let freeform: [String: String]
 
-    public init(answers: [String: String], freeform: [String: String]) {
+    public init(answers: [String: String]) {
         self.answers = answers
-        self.freeform = freeform
     }
 }

@@ -149,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func presentOnboarding() {
         let viewModel = PetImportViewModel()
-        let flow = OnboardingFlow(importViewModel: viewModel) { [weak self] in
+        let flow = OnboardingFlow(importViewModel: viewModel, hooks: HookInstallCoordinator()) { [weak self] in
             self?.finishOnboarding()
         }
         let window = makeHostingWindow(title: "欢迎使用 VibePet", view: flow)
@@ -187,16 +187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow.makeKeyAndOrderFront(nil)
             return
         }
-        let placeholder = VStack(spacing: 12) {
-            Image(systemName: "gearshape").font(.system(size: 36)).foregroundStyle(.secondary)
-            Text("设置").font(.title3.bold())
-            Text("启用工具、安装 hooks、决策超时等设置将在 M6 接入。")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: 320)
-        }
-        .padding(28)
-        let window = makeHostingWindow(title: "VibePet 设置", view: placeholder)
+        let view = SettingsView(hooks: HookInstallCoordinator(), configStore: configStore)
+        let window = makeHostingWindow(title: "VibePet 设置", view: view)
         settingsWindow = window
         window.makeKeyAndOrderFront(nil)
     }

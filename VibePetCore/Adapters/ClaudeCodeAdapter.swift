@@ -3,7 +3,8 @@ import Foundation
 /// Normalizes Claude Code hook events into the bridge protocol. M3 covered the
 /// notification subset (`Stop` → `.completion`, `Notification` → `.status`); M4
 /// adds `PreToolUse` (≠ `AskUserQuestion`) → `.approval` parsing and approval
-/// response encoding. `AskUserQuestion` → `.question` lands in M5.
+/// response encoding. M5 (spike verified, Claude Code ≥ 2.1.85) adds
+/// `AskUserQuestion` → `.question` parsing and answer write-back via `updatedInput`.
 public struct ClaudeCodeAdapter: ToolAdapter {
     public let tool: ToolKind = .claudeCode
 
@@ -17,6 +18,12 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     /// Used when a `Stop` event carries no displayable summary.
     static let completionFallback = "Claude Code 完成了一轮任务"
     static let notificationFallback = "Claude Code 有新通知"
+    /// Title shown above the structured-question card when `AskUserQuestion` carries
+    /// no overall title of its own.
+    static let askQuestionTitle = "Claude 需要你确认"
+    /// Synthetic free-text choice appended to every question (the CLI adds this
+    /// client-side). Selecting it lets the user type a custom answer.
+    static let otherOptionLabel = "其他"
 
     public init() {
         self.init(transcriptSummaryReader: ClaudeCodeAdapter.readTranscriptSummary(path:))
@@ -55,6 +62,9 @@ public struct ClaudeCodeAdapter: ToolAdapter {
                 content: .status(StatusContent(text: singleLine(message)))
             )
         case "PreToolUse":
+            if (object["tool_name"] as? String).flatMap(nonEmpty) == "AskUserQuestion" {
+                return makeQuestionEnvelope(from: object, source: source)
+            }
             return makeApprovalEnvelope(from: object, source: source)
         default:
             // Events outside the supported subset.
@@ -66,9 +76,8 @@ public struct ClaudeCodeAdapter: ToolAdapter {
         switch response {
         case let .approval(decision):
             return Self.encodeApproval(decision)
-        case .question:
-            // Question (`updatedInput`) encoding lands in M5.
-            return Data()
+        case let .question(answer):
+            return Self.encodeQuestion(answer, for: envelope)
         case .defer:
             // Defer == no JSON on stdout, exit 0 → Claude Code falls back to its
             // normal permission flow (fail-open, §7). Verified against the hooks
@@ -80,7 +89,8 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     // MARK: - PreToolUse → approval
 
     /// Builds an `.approval` envelope from a `PreToolUse` event. `AskUserQuestion`
-    /// is a question (M5), not an approval, so it is ignored here.
+    /// is routed to the question path by the caller, so the guard here is
+    /// defensive only.
     private func makeApprovalEnvelope(from object: [String: Any], source: SourceInfo) -> BridgeEnvelope? {
         guard let toolName = (object["tool_name"] as? String).flatMap(nonEmpty) else {
             return nil
@@ -152,6 +162,113 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     private static func lineCount(_ text: String?) -> Int {
         guard let text, !text.isEmpty else { return 0 }
         return text.split(separator: "\n", omittingEmptySubsequences: false).count
+    }
+
+    // MARK: - PreToolUse(AskUserQuestion) → question
+
+    /// Builds a `.question` envelope from an `AskUserQuestion` PreToolUse event.
+    /// Verified mechanism (M5-0 spike, Claude Code ≥ 2.1.85): a PreToolUse hook can
+    /// satisfy `AskUserQuestion` by returning `updatedInput` + `permissionDecision:
+    /// "allow"`, so VibePet answers it in-bubble and writes the answer back.
+    /// Field names per the `AskUserQuestion` input schema: `questions[].{question,
+    /// header, multiSelect, options[].{label, description}}`.
+    private func makeQuestionEnvelope(from object: [String: Any], source: SourceInfo) -> BridgeEnvelope? {
+        guard
+            let input = object["tool_input"] as? [String: Any],
+            let rawQuestions = input["questions"] as? [[String: Any]]
+        else {
+            return nil
+        }
+
+        let items: [QuestionItem] = rawQuestions.compactMap { question in
+            guard let prompt = (question["question"] as? String).flatMap(nonEmpty) else {
+                return nil
+            }
+            let header = (question["header"] as? String).flatMap(nonEmpty) ?? String(prompt.prefix(12))
+            let multiSelect = (question["multiSelect"] as? Bool) ?? false
+            var options: [QuestionOption] = ((question["options"] as? [[String: Any]]) ?? []).compactMap { option in
+                guard let label = (option["label"] as? String).flatMap(nonEmpty) else {
+                    return nil
+                }
+                return QuestionOption(
+                    label: label,
+                    detail: (option["description"] as? String).flatMap(nonEmpty),
+                    allowsFreeform: false
+                )
+            }
+            guard !options.isEmpty else {
+                return nil
+            }
+            // The CLIs add an "Other" free-text choice client-side (and tell the model
+            // not to emit one); mirror that so every question can be answered freely.
+            // Its typed text becomes the answer value; it is stripped back out before
+            // the questions are written into `updatedInput` (see `encodeQuestion`).
+            options.append(QuestionOption(label: Self.otherOptionLabel, detail: nil, allowsFreeform: true))
+            return QuestionItem(header: header, prompt: prompt, options: options, multiSelect: multiSelect)
+        }
+
+        guard !items.isEmpty else {
+            return nil
+        }
+        return makeEnvelope(
+            source: source,
+            content: .question(QuestionContent(title: Self.askQuestionTitle, questions: items))
+        )
+    }
+
+    // MARK: - Question response encoding
+
+    /// Encodes a question answer to the Claude Code `AskUserQuestion` hook output:
+    /// `permissionDecision:"allow"` + an `updatedInput` carrying the original
+    /// questions plus the user's answers, so the tool proceeds without prompting
+    /// natively (verified ≥ 2.1.85).
+    ///
+    /// `updatedInput` *replaces* the whole tool input, so `questions` must be
+    /// preserved alongside `answers`. `encodeResponse` only sees the normalized
+    /// envelope (not the raw stdin), so `questions` are reconstructed from the
+    /// `QuestionContent` — minus the synthetic "其他" option, which is a UI-only
+    /// affordance that must not leak back into the tool's question schema.
+    /// `QuestionAnswer.answers` is keyed by `header`, while the `AskUserQuestion`
+    /// `answers` map is keyed by question text — translated here via each
+    /// `QuestionItem`. With no usable selection, it defers (no JSON) so the tool
+    /// falls back to its native prompt (fail-open).
+    static func encodeQuestion(_ answer: QuestionAnswer, for envelope: BridgeEnvelope) -> Data {
+        guard case let .question(content) = envelope.content else {
+            return Data()
+        }
+
+        var answersByQuestion: [String: String] = [:]
+        var questions: [[String: Any]] = []
+        for item in content.questions {
+            if let value = answer.answers[item.header].flatMap(nonEmpty) {
+                answersByQuestion[item.prompt] = value
+            }
+            questions.append([
+                "question": item.prompt,
+                "header": item.header,
+                "multiSelect": item.multiSelect,
+                "options": item.options.filter { !$0.allowsFreeform }.map { option -> [String: Any] in
+                    var encoded: [String: Any] = ["label": option.label]
+                    if let detail = option.detail {
+                        encoded["description"] = detail
+                    }
+                    return encoded
+                },
+            ])
+        }
+
+        guard !answersByQuestion.isEmpty else {
+            return Data()
+        }
+
+        let payload: [String: Any] = [
+            "hookSpecificOutput": [
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": ["questions": questions, "answers": answersByQuestion],
+            ],
+        ]
+        return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
 
     // MARK: - Approval response encoding

@@ -77,8 +77,12 @@ final class ClaudeCodeApprovalParseTests: XCTestCase {
     }
 
     func testAskUserQuestionIsNotApproval() throws {
-        // AskUserQuestion is a question (M5), not an approval — ignored in M4.
-        XCTAssertNil(try adapter.parseEvent(stdin: fixture("pretooluse-askuserquestion.json"), env: [:]))
+        // AskUserQuestion becomes a `.question` (M5), never an approval. The full
+        // question mapping is covered by ClaudeCodeQuestionParseTests.
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("ask-user-question.json"), env: [:]))
+        if case .approval = envelope.content {
+            XCTFail("AskUserQuestion must not become an approval")
+        }
     }
 
     func testApprovalNeedsResponse() throws {

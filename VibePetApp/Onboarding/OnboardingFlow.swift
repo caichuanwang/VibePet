@@ -1,13 +1,14 @@
 import SwiftUI
 import VibePetCore
 
-/// First-launch onboarding: ① welcome → ② generate pet (reusing `PetImportPanel`).
-/// Step ③ (install hooks) is only a placeholder in M2 and is wired up in M6
-/// (technical design §5.4, PRD US-0①②).
+/// First-launch onboarding: ① welcome → ② generate pet (reusing `PetImportPanel`)
+/// → ③ install hooks (only the detected tools, skippable). Wired up in M6
+/// (technical design §5.4, PRD US-0①②③).
 struct OnboardingFlow: View {
     @ObservedObject var importViewModel: PetImportViewModel
+    @ObservedObject var hooks: HookInstallCoordinator
     /// Called when the user finishes onboarding (after the pet is placed and the
-    /// step-③ placeholder is dismissed).
+    /// step-③ hooks step is dismissed/skipped).
     var onFinished: () -> Void
 
     @State private var started = false
@@ -17,7 +18,7 @@ struct OnboardingFlow: View {
             if !started {
                 welcomeView
             } else if importViewModel.phase == .placed {
-                installHooksPlaceholder
+                installHooksStep
             } else {
                 generateView
             }
@@ -50,19 +51,37 @@ struct OnboardingFlow: View {
         }
     }
 
-    private var installHooksPlaceholder: some View {
+    private var installHooksStep: some View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 44))
+                .font(.system(size: 40))
                 .foregroundStyle(.green)
             Text("宠物准备好了！").font(.title3.bold())
-            Text("下一步可以安装 Claude Code / Codex 的提醒 hooks —— 这一步将在后续版本接入，现在可以先跳过。")
+            Text("给检测到的工具安装提醒 hooks，宠物就能在审批/完成时叫你。也可以以后再说。")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 360)
-            Button("完成") { onFinished() }
-                .keyboardShortcut(.defaultAction)
-                .controlSize(.large)
+
+            // Only when a detected tool has a pre-existing, repairable broken install.
+            if hooks.hasRepairableDriftAmongDetected() {
+                Label("检测到既有配置异常，点下方「修复」即可一键修正。", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(BubbleTheme.errorAccent)
+                    .frame(maxWidth: 360)
+            }
+
+            HookInstallSection(coordinator: hooks, detectedOnly: true)
+                .frame(maxWidth: 360)
+
+            HStack {
+                Button("以后再说") { onFinished() }
+                Button("完成") { onFinished() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
         }
+        // Refresh on arrival: the coordinator was built at launch, but the user only
+        // reaches this step after generating a pet, so detection/health may be stale.
+        .onAppear { hooks.refresh() }
     }
 }

@@ -1,0 +1,8 @@
+model = "gpt-5-codex"
+
+[features]
+web_search = true
+
+[mcp_servers.example]
+command = "node"
+args = ["server.js"]

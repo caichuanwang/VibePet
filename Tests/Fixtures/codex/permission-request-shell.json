@@ -1,0 +1,14 @@
+{
+  "hook_event_name": "PermissionRequest",
+  "session_id": "9f8e7d6c5b4a3210",
+  "transcript_path": "/Users/dev/.codex/sessions/9f8e7d.jsonl",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "model": "gpt-5-codex",
+  "permission_mode": "default",
+  "turn_id": "turn_42",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "sudo rm -rf /tmp/build-cache",
+    "description": "Clear the build cache"
+  }
+}

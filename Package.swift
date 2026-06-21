@@ -71,6 +71,14 @@ let package = Package(
             name: "VibePetAppTests",
             dependencies: ["VibePetApp", "VibePetCore"],
             path: "Tests/VibePetAppTests"
+        ),
+        .testTarget(
+            name: "VibePetSetupTests",
+            // The installer logic (binary copy, manifest, config writers) lives in
+            // VibePetCore so it is shared with VibePetApp (trust activation) and
+            // unit-testable in-process; the VibePetSetup executable is a thin shell.
+            dependencies: ["VibePetCore"],
+            path: "Tests/VibePetSetupTests"
         )
     ]
 )

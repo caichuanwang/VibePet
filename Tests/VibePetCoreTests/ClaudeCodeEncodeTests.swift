@@ -39,13 +39,8 @@ final class ClaudeCodeEncodeTests: XCTestCase {
         XCTAssertTrue(data.isEmpty)
     }
 
-    func testQuestionEncodingIsEmptyUntilM5() {
-        let data = adapter.encodeResponse(
-            .question(QuestionAnswer(answers: [:], freeform: [:])),
-            for: sampleEnvelope()
-        )
-        XCTAssertTrue(data.isEmpty)
-    }
+    // Question (`AskUserQuestion`) encoding lands in M5 and is covered by
+    // ClaudeCodeQuestionEncodeTests (allow + updatedInput, and defer on no answer).
 
     // MARK: - Helpers
 

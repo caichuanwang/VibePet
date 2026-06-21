@@ -101,6 +101,8 @@ VibePet 是一个 macOS 原生桌面宠物应用。用户上传自己宠物或�
 **US-3b：结构化提问（多选题）**
 > 作为用户，当 Claude Code 用 `AskUserQuestion` 问我多选题时，我想直接在宠物气泡里点选答案，这样不用切回终端。
 
+> 📌 **M5-0 spike 结论（2026-06-20）：机制受支持（Claude Code ≥ 2.1.85），MVP 走完整气泡内作答路径。** 官方 changelog 确认 `PreToolUse` 可经 `updatedInput` + `permissionDecision:"allow"` 满足 `AskUserQuestion`。答案格式据官方 Agent SDK user-input 文档 + 同源开源实现 Open Island 核实：`answers` 按 question text 归集，单选=label、多选以 `", "` 连接、自由文本"Other"以**用户文本作为答案值**（无需 annotations）；每题客户端追加"其他"选项。已知版本回归（#52822 v2.1.119 仍弹原生、#15897 多 hook 忽略）由 fail-open 倒计时兜底。详见技术方案 §4.1 脚注与 `Tests/Fixtures/claude/m5-question-spike-notes.md`。
+
 验收标准：
 - Claude Code `AskUserQuestion updatedInput` schema spike 通过时，宠物气泡渲染题干 + 选项（含多选 / 自由文本），点选并提交后答案经 hook `updatedInput` 预填回工具，工具不再弹原生提问。
 - 若该 schema 未验证通过或当前 Claude Code 版本不兼容，MVP 降级为提醒 + 引导回终端处理，且不阻塞原生提问。

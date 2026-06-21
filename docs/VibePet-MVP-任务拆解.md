@@ -23,6 +23,7 @@
 - [M4 · 审批闭环](#m4--审批闭环)
 - [M5 · 提问闭环](#m5--提问闭环)
 - [M6 · Codex 适配 + 安装器 + 发布打磨](#m6--codex-适配--安装器--发布打磨)
+- [M6 剩余待办（发布前必清）](#m6-剩余待办发布前必清)
 - [关键路径与并行建议](#关键路径与并行建议)
 - [技术债与后续跟踪（Code Review）](#技术债与后续跟踪code-review)
 
@@ -252,7 +253,7 @@
 
 - **验收标准**：用当前 Claude Code 版本的官方文档/本机 hook fixture 验证 `AskUserQuestion` 的输入 schema、`updatedInput` 回写字段与抑制原生提问的实际行为；产出 fixture、最小回写样例与结论。若无法验证，M5 后续实现走降级路径：提醒 + 回终端处理，不承诺气泡内作答。
 - **依赖**：M4-1、M4-4。（schema 研究阶段——查官方文档/读 hook 事件格式——仅需 M4-1 即可开始；M4-4 只在运行时验证"updatedInput 回写后原生提问被抑制"时才是硬前置。）
-- **涉及文件/类型**：`Tests/Fixtures/claude/ask-user-question.json`；`Tests/VibePetCoreTests/ClaudeCodeQuestionSpikeTests.swift`。
+- **涉及文件/类型**：`Tests/Fixtures/claude/ask-user-question.json`；`Tests/Fixtures/claude/m5-question-spike-notes.md`（结论笔记，spike 验证并入 M5-1/M5-3 解析与回写单测）。
 
 ### M5-1 · ClaudeCodeAdapter — AskUserQuestion → question 解析
 
@@ -328,6 +329,44 @@
 
 ---
 
+## M6 剩余待办（发布前必清）
+
+> M6 代码实现已完成（openspec change `implement-m6-codex-installer-polish`，**28/30 任务**，`swift test` 226 全绿）。
+> 实际落地与原拆解的差异：安装逻辑放 `VibePetCore/Install/`（非 `VibePetSetup/`，因 `InstallManifest` 需 App+Setup 共享）；Codex 写入按 **open-vibe-island** 做法（hooks→`~/.codex/hooks.json` + `config.toml` 切 `[features] hooks = true` + 用 `Stop` hook 报完成，非 `notify`）。
+> 下列为**自动化无法覆盖、需手工/环境**的收尾项与实现中记录的待验证点。完成对应项后回填本节复选框。
+
+### 待办 A · openspec 变更归档（spec 同步）
+
+- [ ] 运行 `/opsx:archive`：把 change 的 delta specs 同步进主 `openspec/specs/`（新增 `codex-adapter`/`hook-installer`/`settings-page`/`error-presentation`，更新 `approval-card`/`onboarding-flow`/`hook-cli`），并归档 change。**对应任务 11.1。**
+
+### 待办 B · 真实会话 KPI 验收（M6-10.2，手工 · 仅本机）
+
+> ⚠️ 不能在自动化/CI 跑：`homeDirectoryForCurrentUser` 忽略 `$HOME`，真实 install 会写真实 `~/.claude`/`~/.codex`（见 TD-5）。本机用户在用 OpenIsland，勿覆盖其 `~/.codex/hooks.json` 条目。详细步骤见 `docs/RELEASE-CHECKLIST.md`。
+
+- [ ] `swift run VibePetSetup install`（或设置页一键安装）写入真实 `~/.claude/settings.json` 与 `~/.codex/`（hooks.json + `[features]`）
+- [ ] **Claude Code 真实会话**：触发审批 → 气泡 ≤500ms 出现 → 拒绝/允许真实回传生效
+- [ ] **Fail-open 100%**：App 未运行 ≤2s `defer`；App 在线但用户不响应，到点（默认 20s）`defer`
+- [ ] **Codex 真实会话**：`PermissionRequest` 审批回路通过；提问/plan-mode 降级为「回终端处理」提示正确
+- [ ] **Codex trust 激活**：写入后显示「已写入待信任」，在 Codex `/hooks` 信任后、收到首个真实 Codex 事件 → `trustedActive`（设置页显示「已启用」）
+- [ ] 抠图/照片基准 KPI 引用 M1-5 既有通过结论（**不重复跑**）
+
+### 待办 C · App 签名与公证（M6-7 延后 · 独立发布动作）
+
+- [ ] 准备 Apple Developer ID Application 证书与 `notarytool` keychain profile
+- [ ] 补全 `Scripts/notarize.sh`（移除占位 `exit 1`，填 TEAM/PROFILE），打包 `VibePet.app`（含 `VibePetHooks`/`VibePetSetup`）
+- [ ] 签名 → `notarytool submit --wait` → `stapler staple` → `codesign --verify` / `spctl -a -vv` 校验通过
+
+### 待办 D · 实现中记录的待验证点（真实 Codex 会话核对后再定）
+
+- [ ] **`requiresTerminalApproval` 触发条件**：现按 `tool_name == "AskUserQuestion"`（镜像 Claude 命名，**暂定**）；待真实 Codex 提问/plan-mode 事件核对后调整 `CodexAdapter.freeformInputTools`
+- [ ] **Codex `[features]` legacy key**：现只写 `hooks = true`；Codex < 0.130 用 `codex_hooks`，需要时按版本探测（open-vibe-island 做法）兼容
+- [ ] **`apply_patch` 解析**：现为轻量解析（首个 `*** … File:` 路径 + 行首 `+/-` 计数）；多文件 / 重命名 / 删除场景待真机补全
+- [ ] **`notify` 载荷 `cwd` 缺失**：部分 Codex 版本 notify 无 `cwd`（openai/codex#4005），此时 `projectName` 退化为空——VibePet 已改用 `Stop` hook 为主，notify 仅兜底
+
+> 笔记：Codex schema 与做法见 `Tests/Fixtures/codex/codex-spike-notes.md`；范围决定（签名延后、KPI 真机验收）见本变更 `proposal.md` / `design.md`。
+
+---
+
 ## 关键路径与并行建议
 
 **关键路径（决定 MVP 完成时间）**：
@@ -389,3 +428,12 @@ M0-2 → M0-3 → M0-4/M0-5 → M3-1/M3-2 → M3-3 → M4-1
 - **影响里程碑**：**M3**（fail-open KPI：CLI 连接失败 ≤2s 内 `defer`；M4 审批无响应 20s 倒计时后 `defer`）。
 - **建议方案**：M3 接线 CLI 时为 `BridgeClient` 增加连接/读取超时（带截止时间或 `select`/`poll`），到点返回 typed error → CLI `defer`。
 - **涉及文件**：`VibePetCore/Bridge/BridgeClient.swift`、`VibePetCore/Bridge/BridgeSocketIO.swift`。
+
+### TD-5 · 安装器真实写入只能手工验证（`homeDirectoryForCurrentUser` 忽略 `$HOME`）
+
+- **问题**：`ClaudeCodeConfigWriter` / `CodexConfigWriter` 的默认路径用 `FileManager.homeDirectoryForCurrentUser`，macOS 上**忽略 `$HOME`**——即便设了 `HOME=/tmp`，真实 install 仍写 `~/.claude`、`~/.codex`。单测/协调器全部走注入的 `configURL`/`codexDirectory`/`applicationSupportRoot` 临时目录，安全。
+- **现状（M6）**：单元/E2E 全绿（226 tests）。真实安装到本机配置 + 真实 Claude/Codex 会话的 KPI 验收（端到端闭环、≤500ms、Fail-open 100%、Codex `installedNeedsTrust→trustedActive`）属**手工步骤**，见 `docs/RELEASE-CHECKLIST.md`，不得在自动化/CI 里跑真实 install。
+- **影响里程碑**：**M6 发布**（含 App 签名/公证，均延后到单独发布动作）。
+- **涉及文件**：`VibePetCore/Install/*`、`Scripts/notarize.sh`、`docs/RELEASE-CHECKLIST.md`。
+
+> **M6 实现状态（openspec change `implement-m6-codex-installer-polish`）**：M6-1~M6-6 + M6-7 代码部分（`ErrorPresenter`、`BubbleTheme` 跟随明暗）已实现并测过；Codex 安装按 open-vibe-island 做法（hooks.json + `[features]` flag + `Stop` hook，clean-room）。**延后**：App 签名/公证、真实会话 KPI 验收（M6-10.2）。

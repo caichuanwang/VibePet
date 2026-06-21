@@ -1,0 +1,19 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "a1b2c3d4e5f6",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which database should we use?",
+        "header": "Database",
+        "multiSelect": false,
+        "options": [
+          { "label": "SQLite", "description": "Lightweight, zero-config" },
+          { "label": "Postgres", "description": "Needs a separate server" }
+        ]
+      }
+    ]
+  }
+}

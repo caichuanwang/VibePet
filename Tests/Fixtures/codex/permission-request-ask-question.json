@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "PermissionRequest",
+  "session_id": "112233445566aabb",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "turn_id": "turn_12",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "description": "Pick a deployment target",
+    "questions": [
+      { "question": "Which environment?", "options": [{ "label": "staging" }, { "label": "production" }] }
+    ]
+  }
+}

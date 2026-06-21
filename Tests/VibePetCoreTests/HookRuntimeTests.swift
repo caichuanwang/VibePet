@@ -139,6 +139,52 @@ final class HookRuntimeTests: XCTestCase {
         XCTAssertEqual(outcome, .deferred)
     }
 
+    // MARK: - Diagnostics (VIBEPET_HOOKS_DEBUG)
+
+    func testDecisionSendFailureInvokesLogger() async throws {
+        let box = MessageBox()
+        let runtime = HookRuntime(
+            adapter: StubAdapter(result: .success(approvalEnvelope)),
+            sendNotification: { _ in XCTFail("decision must not use the notification path") },
+            sendDecision: { _ in throw StubError() },
+            log: { box.append($0) }
+        )
+
+        let outcome = await runtime.run(stdin: Data("{}".utf8), env: [:])
+
+        XCTAssertEqual(outcome, .deferred)
+        XCTAssertEqual(box.messages.count, 1)
+        XCTAssertTrue(box.messages.first?.contains("decision deferred") == true, "log should explain the fail-open")
+    }
+
+    func testNotificationSendFailureInvokesLogger() async throws {
+        let box = MessageBox()
+        let runtime = HookRuntime(
+            adapter: StubAdapter(result: .success(notificationEnvelope)),
+            sendNotification: { _ in throw StubError() },
+            log: { box.append($0) }
+        )
+
+        let outcome = await runtime.run(stdin: Data("{}".utf8), env: [:])
+
+        XCTAssertEqual(outcome, .deferred)
+        XCTAssertEqual(box.messages.count, 1)
+        XCTAssertTrue(box.messages.first?.contains("notification deferred") == true)
+    }
+
+    func testIgnoredEventDoesNotInvokeLogger() async throws {
+        let box = MessageBox()
+        let runtime = HookRuntime(
+            adapter: StubAdapter(result: .success(nil)),
+            sendNotification: { _ in },
+            log: { box.append($0) }
+        )
+
+        _ = await runtime.run(stdin: Data("{}".utf8), env: [:])
+
+        XCTAssertTrue(box.messages.isEmpty, "an ignored event is normal — no diagnostics noise")
+    }
+
     // MARK: - Fixtures
 
     private var notificationEnvelope: BridgeEnvelope {
@@ -178,6 +224,23 @@ private struct StubAdapter: ToolAdapter {
 }
 
 private struct StubError: Error {}
+
+/// Thread-safe collector for the runtime's synchronous `@Sendable` log closure,
+/// which may be invoked off the test's actor.
+private final class MessageBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    func append(_ message: String) {
+        lock.lock(); defer { lock.unlock() }
+        storage.append(message)
+    }
+
+    var messages: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return storage
+    }
+}
 
 private actor EnvelopeRecorder {
     private(set) var envelopes: [BridgeEnvelope] = []

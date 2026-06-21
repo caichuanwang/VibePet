@@ -17,9 +17,14 @@ import VibePetCore
 final class BridgeServerHost {
     private let petController: PetController
     private let socketPath: SocketPath
+    private let manifestStore: InstallManifestStore
     private var server: BridgeServer?
     private var notifyTask: Task<Void, Never>?
     private var decideTask: Task<Void, Never>?
+    /// Receiving a real Codex hook event is the runtime evidence that the user
+    /// trusted VibePet in `/hooks`; flip the manifest to `trustedActive` once
+    /// (M6-5a). Cached so we stop hitting disk after the first activation.
+    private var codexTrustMarked = false
 
     /// A response-bearing request plus the `Sendable` reply that resumes the
     /// suspended handler with the user's decision.
@@ -28,9 +33,23 @@ final class BridgeServerHost {
         let reply: @Sendable (BridgeResponse) -> Void
     }
 
-    init(petController: PetController, socketPath: SocketPath = SocketPath()) {
+    init(
+        petController: PetController,
+        socketPath: SocketPath = SocketPath(),
+        manifestStore: InstallManifestStore? = nil
+    ) {
         self.petController = petController
         self.socketPath = socketPath
+        self.manifestStore = manifestStore
+            ?? InstallManifestStore(applicationSupportRoot: socketPath.applicationSupportRoot)
+    }
+
+    /// On the first real Codex event, promote its hook install to `trustedActive`.
+    private func markCodexTrustedIfNeeded(_ envelope: BridgeEnvelope) {
+        guard !codexTrustMarked, envelope.source.tool == .codex else { return }
+        if manifestStore.markTrustedActive(tool: .codex) {
+            codexTrustMarked = true
+        }
     }
 
     func start() {
@@ -39,12 +58,14 @@ final class BridgeServerHost {
 
         notifyTask = Task { @MainActor [petController] in
             for await envelope in notifyStream {
+                self.markCodexTrustedIfNeeded(envelope)
                 petController.handle(envelope)
             }
         }
 
         decideTask = Task { @MainActor [petController] in
             for await request in decideStream {
+                self.markCodexTrustedIfNeeded(request.envelope)
                 // Await each decision on its own task so a long wait (default 20s)
                 // does not block subsequent requests or notifications.
                 Task { @MainActor in

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import VibePetCore
 
@@ -13,6 +14,22 @@ struct ApprovalCard: View {
         case deny
         case allow
     }
+
+    /// The footer's interaction mode. A normal approval shows the decision buttons;
+    /// a `requiresTerminalApproval` request (Codex questions/plan-mode that hooks
+    /// cannot answer, §5.3.3 末) shows only a "回终端处理" affordance.
+    enum FooterMode: Equatable {
+        case decision
+        case terminal
+    }
+
+    /// Pure decision used by both the view and tests.
+    static func footerMode(for content: ApprovalContent) -> FooterMode {
+        content.requiresTerminalApproval ? .terminal : .decision
+    }
+
+    /// Activating "回终端处理" defers so the tool falls back to its native flow.
+    static let terminalResponse: BridgeResponse = .defer
 
     let content: ApprovalContent
     let source: SourceInfo
@@ -151,11 +168,54 @@ struct ApprovalCard: View {
 
     // MARK: - Footer (countdown + buttons)
 
+    @ViewBuilder
     private var footer: some View {
-        HStack(spacing: 8) {
-            countdownLabel
-            Spacer(minLength: 6)
-            buttons
+        switch Self.footerMode(for: content) {
+        case .decision:
+            HStack(spacing: 8) {
+                countdownLabel
+                Spacer(minLength: 6)
+                buttons
+            }
+        case .terminal:
+            terminalFooter
+        }
+    }
+
+    /// Degraded footer for `requiresTerminalApproval`: a readable hint plus a single
+    /// "回终端处理" button. MVP only copies the action summary and defers (real
+    /// jump-back to the terminal is v1.1).
+    private var terminalFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("此请求需在终端继续处理")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                countdownLabel
+                Spacer(minLength: 6)
+                Button("回终端处理") { handleInTerminal() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private func handleInTerminal() {
+        // Copy the action summary so the user can locate/paste it in the terminal,
+        // then defer to the tool's native flow.
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(previewText, forType: .string)
+        decide(Self.terminalResponse)
+    }
+
+    private var previewText: String {
+        switch content.preview {
+        case let .command(text): text
+        case let .fileChange(path, _, _): path
+        case let .fileRead(path): path
+        case let .network(target): target
+        case let .generic(summary): summary
         }
     }
 

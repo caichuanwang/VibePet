@@ -30,7 +30,6 @@ final class PetController {
     /// approvals never clobber each other's continuation.
     private struct PendingDecision: Identifiable {
         let envelope: BridgeEnvelope
-        let approval: ApprovalContent
         let continuation: CheckedContinuation<BridgeResponse, Never>
         var id: UUID { envelope.requestId }
     }
@@ -115,14 +114,14 @@ final class PetController {
     /// to the request by `requestId` upstream. Concurrent calls are queued FIFO so
     /// they never clobber each other's continuation.
     func requestDecision(for envelope: BridgeEnvelope) async -> BridgeResponse {
-        guard case let .approval(approval) = envelope.content else {
-            // `question` decisions land in M5; anything else is non-interactive.
+        guard envelope.content.needsResponse else {
+            // Only response-bearing content (`approval` / `question`) is interactive.
             return .defer
         }
 
         return await withCheckedContinuation { continuation in
             decisions.enqueue(
-                PendingDecision(envelope: envelope, approval: approval, continuation: continuation)
+                PendingDecision(envelope: envelope, continuation: continuation)
             )
             if decisions.count == 1 {
                 presentFrontDecision()
@@ -171,16 +170,35 @@ final class PetController {
             in: surface.visibleFrame
         )
         startDecisionTimeout(for: front.id)
-        surface.presentApproval(
-            content: front.approval,
-            source: front.envelope.source,
-            placement: placement,
-            timeout: decisionTimeout,
-            pendingCount: decisions.pendingCount,
-            onDecision: { [weak self] response in
-                self?.resolveDecision(requestId: front.id, with: response)
-            }
-        )
+
+        let onDecision: (BridgeResponse) -> Void = { [weak self] response in
+            self?.resolveDecision(requestId: front.id, with: response)
+        }
+
+        switch front.envelope.content {
+        case let .approval(approval):
+            surface.presentApproval(
+                content: approval,
+                source: front.envelope.source,
+                placement: placement,
+                timeout: decisionTimeout,
+                pendingCount: decisions.pendingCount,
+                onDecision: onDecision
+            )
+        case let .question(question):
+            surface.presentQuestion(
+                content: question,
+                source: front.envelope.source,
+                placement: placement,
+                timeout: decisionTimeout,
+                pendingCount: decisions.pendingCount,
+                onAnswer: onDecision
+            )
+        case .completion, .status:
+            // Non-interactive content never enters the decision queue (guarded by
+            // `requestDecision`); fail open defensively if it ever does.
+            resolveDecision(requestId: front.id, with: .defer)
+        }
     }
 
     /// Resolves the front decision iff `requestId` still matches it, so a duplicate
@@ -286,6 +304,17 @@ protocol PetSurface: AnyObject {
         timeout: TimeInterval,
         pendingCount: Int,
         onDecision: @escaping (BridgeResponse) -> Void
+    )
+    /// Presents an interactive structured-question card. `onAnswer` is invoked
+    /// exactly once with `.question(QuestionAnswer)` on submit, or `.defer` from the
+    /// card's own countdown / dismissal.
+    func presentQuestion(
+        content: QuestionContent,
+        source: SourceInfo,
+        placement: BubbleAnchor.Placement,
+        timeout: TimeInterval,
+        pendingCount: Int,
+        onAnswer: @escaping (BridgeResponse) -> Void
     )
     /// Updates the "还有 N 个待处理" badge while the front card stays presented.
     func updatePendingCount(_ count: Int)

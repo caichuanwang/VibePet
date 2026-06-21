@@ -20,10 +20,7 @@ final class BridgeResponseCodecTests: XCTestCase {
     func testQuestionAnswerRoundTrips() throws {
         try assertRoundTrip(
             .question(
-                QuestionAnswer(
-                    answers: ["strategy": #"["Fast","Small"]"#],
-                    freeform: ["notes": "Keep the diff small"]
-                )
+                QuestionAnswer(answers: ["strategy": "Fast, Small", "notes": "Keep the diff small"])
             )
         )
     }

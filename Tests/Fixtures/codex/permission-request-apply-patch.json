@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PermissionRequest",
+  "session_id": "aabbccddeeff0011",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "model": "gpt-5-codex",
+  "turn_id": "turn_7",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n+added line\n*** End Patch",
+    "description": "Update README"
+  }
+}

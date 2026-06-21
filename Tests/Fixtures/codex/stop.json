@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "9f8e7d6c5b4a3210",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "turn_id": "turn_50",
+  "stop_hook_active": false,
+  "last_assistant_message": "Done — all 42 tests pass."
+}

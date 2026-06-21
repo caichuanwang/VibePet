@@ -133,6 +133,65 @@ final class PetWindowSurface: PetSurface {
         bubbleWindow = window
     }
 
+    // MARK: - Question (decide)
+
+    func presentQuestion(
+        content: QuestionContent,
+        source: SourceInfo,
+        placement: BubbleAnchor.Placement,
+        timeout: TimeInterval,
+        pendingCount: Int,
+        onAnswer: @escaping (BridgeResponse) -> Void
+    ) {
+        dismissBubble()
+
+        let presentation = ApprovalPresentation(pendingCount: pendingCount)
+        approvalPresentation = presentation
+
+        // Re-anchor to the card's actual fitting size (see presentApproval).
+        let measuringEdge: SpeechBubble.TailEdge = placement.vertical == .up ? .bottom : .top
+        let cardSize = Self.fittingSize(
+            for: QuestionCard(
+                content: content,
+                source: source,
+                tailEdge: measuringEdge,
+                tailOffsetX: 0,
+                timeout: timeout,
+                presentation: presentation,
+                onAnswer: { _ in }
+            )
+        )
+        let peek = min(pendingCount, 2)
+        let bubbleSize = CGSize(
+            width: cardSize.width + CGFloat(peek) * 14,
+            height: cardSize.height + CGFloat(peek) * 7
+        )
+
+        let petFrame = windowController?.window?.frame ?? placement.frame
+        let finalPlacement = BubbleAnchor.place(petFrame: petFrame, bubbleSize: bubbleSize, in: visibleFrame)
+        let tailEdge: SpeechBubble.TailEdge = finalPlacement.vertical == .up ? .bottom : .top
+        let tailOffsetX = finalPlacement.tail.x - finalPlacement.frame.minX
+
+        let stack = BubbleStackView(presentation: presentation, tailEdge: tailEdge) {
+            QuestionCard(
+                content: content,
+                source: source,
+                tailEdge: tailEdge,
+                tailOffsetX: tailOffsetX,
+                timeout: timeout,
+                presentation: presentation,
+                onAnswer: onAnswer
+            )
+        }
+
+        // Interactive: must become key for option taps + ⌘↩ submit to work.
+        let window = BubbleWindow(contentRect: finalPlacement.frame, interactive: true)
+        window.contentViewController = NSHostingController(rootView: stack)
+        window.setFrame(finalPlacement.frame, display: true)
+        window.makeKeyAndOrderFront(nil)
+        bubbleWindow = window
+    }
+
     /// Measures a SwiftUI view's content size off-screen so the bubble window can be
     /// sized to hug the card (and therefore the pet).
     private static func fittingSize(for view: some View) -> CGSize {

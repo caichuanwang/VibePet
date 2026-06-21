@@ -25,11 +25,20 @@ public struct HookRuntime: Sendable {
     private let adapter: any ToolAdapter
     private let sendNotification: @Sendable (BridgeEnvelope) async throws -> Void
     private let sendDecision: @Sendable (BridgeEnvelope) async throws -> BridgeResponseEnvelope
+    /// Diagnostics sink for fail-open reasons (bridge unreachable / timed out).
+    /// No-op by default so production runs stay silent; the CLI wires it to stderr
+    /// only under `VIBEPET_HOOKS_DEBUG`.
+    private let log: @Sendable (String) -> Void
 
-    public init(adapter: any ToolAdapter = ClaudeCodeAdapter(), client: BridgeClient = BridgeClient()) {
+    public init(
+        adapter: any ToolAdapter = ClaudeCodeAdapter(),
+        client: BridgeClient = BridgeClient(),
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
         self.adapter = adapter
         self.sendNotification = { try await client.sendOneWay($0) }
         self.sendDecision = { try await client.send($0) }
+        self.log = log
     }
 
     init(
@@ -37,11 +46,13 @@ public struct HookRuntime: Sendable {
         sendNotification: @escaping @Sendable (BridgeEnvelope) async throws -> Void,
         sendDecision: @escaping @Sendable (BridgeEnvelope) async throws -> BridgeResponseEnvelope = { _ in
             throw HookRuntimeError.noDecisionSender
-        }
+        },
+        log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.adapter = adapter
         self.sendNotification = sendNotification
         self.sendDecision = sendDecision
+        self.log = log
     }
 
     public func run(stdin: Data, env: [String: String]) async -> Outcome {
@@ -72,6 +83,7 @@ public struct HookRuntime: Sendable {
             return .sent
         } catch {
             // App not running / connection failed / timed out → fail open.
+            log("notification deferred: \(error)")
             return .deferred
         }
     }
@@ -86,6 +98,8 @@ public struct HookRuntime: Sendable {
             let data = adapter.encodeResponse(responseEnvelope.response, for: envelope)
             return .responded(data)
         } catch {
+            // Connection refused / broken socket / read deadline elapsed → fail open.
+            log("decision deferred: \(error)")
             return .deferred
         }
     }

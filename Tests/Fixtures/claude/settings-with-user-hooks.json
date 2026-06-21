@@ -1,0 +1,11 @@
+{
+  "model": "claude-opus-4-8",
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "/usr/local/bin/user-audit" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "/usr/local/bin/user-postlog" } ] }
+    ]
+  }
+}

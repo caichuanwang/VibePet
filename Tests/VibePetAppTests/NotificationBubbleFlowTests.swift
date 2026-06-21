@@ -214,6 +214,99 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(result.response, .approval(.deny(reason: "blocked")))
     }
 
+    // MARK: - Question (decide) — M5
+
+    func testQuestionEntersDecideAndPresentsCard() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+
+        let task = Task { await controller.requestDecision(for: questionEnvelope()) }
+        try await waitUntil { surface.presentedQuestions.count == 1 }
+
+        XCTAssertEqual(controller.state, .decide)
+        XCTAssertEqual(surface.lastActivity, .deciding)
+        XCTAssertTrue(surface.presentedApprovals.isEmpty, "a question must present a question card, not an approval")
+
+        surface.fireDecision(.question(QuestionAnswer(answers: ["Database": "SQLite"])))
+        _ = await task.value
+    }
+
+    func testQuestionSubmitResolvesWithPairedAnswer() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+
+        let task = Task { await controller.requestDecision(for: questionEnvelope()) }
+        try await waitUntil { surface.presentedQuestions.count == 1 }
+
+        let answer = QuestionAnswer(answers: ["Database": "Postgres"])
+        surface.fireDecision(.question(answer))
+
+        let response = await task.value
+        XCTAssertEqual(response, .question(answer))
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(surface.approvalDismissCount, 1, "draining the queue dismisses the decide bubble")
+    }
+
+    func testUnansweredQuestionTimesOutToDefer() async {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 0.05)
+
+        let response = await controller.requestDecision(for: questionEnvelope())
+
+        XCTAssertEqual(response, .defer)
+        XCTAssertEqual(controller.state, .idle)
+    }
+
+    private func questionEnvelope() -> BridgeEnvelope {
+        BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(tool: .claudeCode, projectName: "VibePet", sessionShortId: "a1b2c3", cwd: "/tmp/VibePet"),
+            content: .question(QuestionContent(
+                title: "Claude 需要你确认",
+                questions: [QuestionItem(
+                    header: "Database",
+                    prompt: "Which database should we use?",
+                    options: [
+                        QuestionOption(label: "SQLite", detail: "Lightweight", allowsFreeform: false),
+                        QuestionOption(label: "Postgres", detail: nil, allowsFreeform: false),
+                    ],
+                    multiSelect: false
+                )]
+            ))
+        )
+    }
+
+    func testTerminalApprovalResolvesAsDeferOnHandleInTerminal() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+
+        let task = Task { await controller.requestDecision(for: terminalApprovalEnvelope()) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+        XCTAssertEqual(surface.presentedApprovals.first?.content.requiresTerminalApproval, true)
+
+        // The "回终端处理" affordance resolves as a defer (handle natively in terminal).
+        surface.fireDecision(.defer)
+
+        let response = await task.value
+        XCTAssertEqual(response, .defer)
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(surface.approvalDismissCount, 1)
+    }
+
+    private func terminalApprovalEnvelope() -> BridgeEnvelope {
+        BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(tool: .codex, projectName: "VibePet", sessionShortId: "9f8e7d", cwd: "/tmp/VibePet"),
+            content: .approval(ApprovalContent(
+                title: "需在终端处理",
+                risk: .medium,
+                preview: .generic(summary: "Pick a deployment target"),
+                alwaysAllow: nil,
+                requiresTerminalApproval: true
+            ))
+        )
+    }
+
     private func approvalEnvelope(command: String = "swift test") -> BridgeEnvelope {
         BridgeEnvelope(
             requestId: UUID(),
@@ -225,6 +318,43 @@ final class NotificationBubbleFlowTests: XCTestCase {
                 alwaysAllow: nil,
                 requiresTerminalApproval: false
             ))
+        )
+    }
+
+    // MARK: - Codex hook trust activation — M6-5a
+
+    func testCodexEventMarksHookTrustActive() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let store = InstallManifestStore(applicationSupportRoot: root.url)
+        var manifest = InstallManifest(hookBinaryVersion: VibePetCore.hookBinaryVersion)
+        manifest.tools[ToolKind.codex.rawValue] = ToolInstallRecord(
+            installed: true,
+            activationState: .installedNeedsTrust,
+            settingsPath: "~/.codex/config.toml",
+            writtenHooks: ["PermissionRequest", "Stop"],
+            backupPath: nil
+        )
+        try store.write(manifest)
+
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath, manifestStore: store)
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        let client = BridgeClient(socketPath: socketPath)
+        try await client.sendOneWay(codexCompletionEnvelope())
+
+        try await waitUntil { store.read().tools[ToolKind.codex.rawValue]?.activationState == .trustedActive }
+    }
+
+    private func codexCompletionEnvelope() -> BridgeEnvelope {
+        BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(tool: .codex, projectName: "VibePet", sessionShortId: "9f8e7d", cwd: "/tmp/VibePet"),
+            content: .completion(CompletionContent(markdownSummary: "Done", isError: false))
         )
     }
 
@@ -263,6 +393,13 @@ private final class FakePetSurface: PetSurface {
         let pendingCount: Int
     }
 
+    struct PresentedQuestion {
+        let content: QuestionContent
+        let source: SourceInfo
+        let timeout: TimeInterval
+        let pendingCount: Int
+    }
+
     var petFrame: CGRect? = CGRect(x: 800, y: 0, width: 120, height: 120)
     var visibleFrame: CGRect = CGRect(x: 0, y: 0, width: 1000, height: 800)
 
@@ -272,6 +409,7 @@ private final class FakePetSurface: PetSurface {
     private var onDismiss: (() -> Void)?
 
     private(set) var presentedApprovals: [PresentedApproval] = []
+    private(set) var presentedQuestions: [PresentedQuestion] = []
     private(set) var approvalDismissCount = 0
     private(set) var lastPendingCount = 0
     private var onDecision: ((BridgeResponse) -> Void)?
@@ -311,6 +449,21 @@ private final class FakePetSurface: PetSurface {
         )
         lastPendingCount = pendingCount
         self.onDecision = onDecision
+    }
+
+    func presentQuestion(
+        content: QuestionContent,
+        source: SourceInfo,
+        placement: BubbleAnchor.Placement,
+        timeout: TimeInterval,
+        pendingCount: Int,
+        onAnswer: @escaping (BridgeResponse) -> Void
+    ) {
+        presentedQuestions.append(
+            PresentedQuestion(content: content, source: source, timeout: timeout, pendingCount: pendingCount)
+        )
+        lastPendingCount = pendingCount
+        self.onDecision = onAnswer
     }
 
     func updatePendingCount(_ count: Int) {
