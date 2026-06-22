@@ -15,7 +15,7 @@ public struct CodexConfigWriter: ToolConfigWriter {
     public let tool: ToolKind = .codex
     public let configURL: URL
     public let hooksURL: URL
-    public var managedHookKeys: [String] { ["PermissionRequest", "Stop"] }
+    public var managedHookKeys: [String] { ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit"] }
     public var managedFiles: [URL] { [configURL, hooksURL] }
 
     private let hookBinaryPath: String

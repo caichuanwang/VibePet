@@ -59,7 +59,12 @@ final class PetController {
     /// Plays the greeting (startup / daily first run) via the state machine, then
     /// schedules a return to idle so `.greet` is transient instead of sticking — the
     /// greeting has no bubble to dismiss, so nothing else would move it back.
-    func greet() {
+    @discardableResult
+    func greet() -> Bool {
+        guard decisions.isEmpty, machine.state != .decide, machine.state != .notify else {
+            return false
+        }
+
         machine.greet()
         render()
 
@@ -70,6 +75,7 @@ final class PetController {
             guard !Task.isCancelled else { return }
             self?.greetingFinished()
         }
+        return true
     }
 
     /// Routes an incoming notification envelope (`completion` / `status`). Response
@@ -106,6 +112,21 @@ final class PetController {
             placement: placement,
             onDismiss: { [weak self] in self?.handleBubbleDismissed() }
         )
+    }
+
+    func sync(with sessionState: SessionState) {
+        switch sessionState.derivedPetActivity {
+        case .deciding:
+            machine.beginDecision()
+        case .greeting:
+            _ = greet()
+            return
+        case .idle:
+            if decisions.isEmpty, machine.state != .notify {
+                machine.bubbleDismissed()
+            }
+        }
+        render()
     }
 
     /// Presents an approval bubble and suspends until the user decides (or the

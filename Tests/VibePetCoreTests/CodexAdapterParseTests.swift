@@ -25,8 +25,14 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertEqual(content.risk, .high)
         XCTAssertEqual(envelope.source.tool, .codex)
         XCTAssertEqual(envelope.source.projectName, "VibePet")
+        XCTAssertEqual(envelope.source.sessionID, "9f8e7d6c5b4a3210")
         XCTAssertEqual(envelope.source.sessionShortId, "9f8e7d")
         XCTAssertTrue(envelope.content.needsResponse)
+        guard case let .permissionRequested(sessionID, _, summary) = envelope.agentEvent else {
+            return XCTFail("Expected permissionRequested, got \(String(describing: envelope.agentEvent))")
+        }
+        XCTAssertEqual(sessionID, "9f8e7d6c5b4a3210")
+        XCTAssertEqual(summary, "Codex PermissionRequest: Bash")
     }
 
     func testApplyPatchPermissionRequestBecomesFileChangeApproval() throws {
@@ -51,7 +57,29 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertFalse(envelope.content.needsResponse)
         XCTAssertEqual(envelope.source.tool, .codex)
         XCTAssertEqual(envelope.source.projectName, "VibePet")
+        XCTAssertEqual(envelope.source.sessionID, "c0ffee123456")
         XCTAssertEqual(envelope.source.sessionShortId, "c0ffee")
+        XCTAssertEqual(envelope.source.jumpTarget?.codexThreadID, "c0ffee123456")
+    }
+
+    func testNotifyAgentTurnCompletePrefersSessionIDWhenPresent() throws {
+        let stdin = try json([
+            "type": "agent-turn-complete",
+            "session_id": "codex-session-full",
+            "thread-id": "codex-thread-1",
+            "cwd": "/Users/dev/Projects/VibePet",
+            "last-assistant-message": "Done",
+        ])
+
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: stdin, env: [:]))
+
+        XCTAssertEqual(envelope.source.sessionID, "codex-session-full")
+        XCTAssertEqual(envelope.source.jumpTarget?.codexThreadID, "codex-thread-1")
+        guard case let .sessionCompleted(sessionID, _, summary, _, _) = envelope.agentEvent else {
+            return XCTFail("Expected sessionCompleted, got \(String(describing: envelope.agentEvent))")
+        }
+        XCTAssertEqual(sessionID, "codex-session-full")
+        XCTAssertEqual(summary, "Done")
     }
 
     func testStopHookBecomesCompletion() throws {
@@ -65,6 +93,7 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertFalse(content.isError)
         XCTAssertFalse(envelope.content.needsResponse)
         XCTAssertEqual(envelope.source.tool, .codex)
+        XCTAssertEqual(envelope.source.sessionID, "9f8e7d6c5b4a3210")
         XCTAssertEqual(envelope.source.sessionShortId, "9f8e7d")
     }
 
@@ -73,13 +102,45 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertNil(try adapter.parseEvent(stdin: stdin, env: [:]))
     }
 
+    func testSessionStartBecomesAgentEvent() throws {
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("session-start.json"), env: [:]))
+
+        guard case let .sessionStarted(sessionID, _, title, tool, summary, _) = envelope.agentEvent else {
+            return XCTFail("Expected sessionStarted, got \(String(describing: envelope.agentEvent))")
+        }
+        XCTAssertEqual(sessionID, "9f8e7d6c5b4a3210")
+        XCTAssertEqual(title, "VibePet")
+        XCTAssertEqual(tool, .codex)
+        XCTAssertEqual(summary, "Codex session started")
+        XCTAssertFalse(envelope.content.needsResponse)
+    }
+
+    func testUserPromptSubmitBecomesActivityUpdated() throws {
+        let event = try XCTUnwrap(adapter.parseAgentEvent(stdin: fixture("user-prompt-submit.json"), env: [:]))
+
+        guard case let .activityUpdated(sessionID, _, summary) = event else {
+            return XCTFail("Expected activityUpdated, got \(event)")
+        }
+        XCTAssertEqual(sessionID, "9f8e7d6c5b4a3210")
+        XCTAssertEqual(summary, "User prompt: Run the tests")
+    }
+
     func testUnsupportedHookEventIsIgnored() throws {
         let stdin = try json([
-            "hook_event_name": "SessionStart",
+            "hook_event_name": "SubagentStart",
             "session_id": "x",
             "cwd": "/tmp",
         ])
         XCTAssertNil(try adapter.parseEvent(stdin: stdin, env: [:]))
+    }
+
+    func testLifecycleEventMissingSessionIDIsIgnored() throws {
+        let stdin = try json([
+            "hook_event_name": "SessionStart",
+            "cwd": "/tmp",
+        ])
+        XCTAssertNil(try adapter.parseEvent(stdin: stdin, env: [:]))
+        XCTAssertNil(try adapter.parseAgentEvent(stdin: stdin, env: [:]))
     }
 
     func testMalformedInputIsIgnored() throws {

@@ -1,12 +1,25 @@
 import XCTest
 @testable import VibePetCore
 
-/// M6-5: `ClaudeCodeConfigWriter` injects VibePet's `PreToolUse`/`Stop`/`Notification`
-/// hook entries into `settings.json` pointing at the stable binary, preserving the
-/// user's own hooks and other settings, idempotently; uninstall removes only what it
-/// wrote.
+/// M6-5: `ClaudeCodeConfigWriter` injects VibePet's decision and lifecycle hook
+/// entries into `settings.json` pointing at the stable binary, preserving the user's
+/// own hooks and other settings, idempotently; uninstall removes only what it wrote.
 final class ClaudeCodeConfigWriterTests: XCTestCase {
     private let binaryPath = "/Users/dev/Library/Application Support/VibePet/bin/VibePetHooks"
+    private let managedHookKeys = [
+        "PreToolUse",
+        "Stop",
+        "Notification",
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "SubagentStart",
+        "SubagentStop",
+        "SessionEnd",
+        "StopFailure",
+        "PermissionDenied",
+        "PreCompact",
+    ]
 
     func testInjectsManagedHookKeys() throws {
         let url = try emptyConfig()
@@ -15,7 +28,8 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         try writer.install(arguments: [])
 
         let hooks = try hooksObject(url)
-        for key in ["PreToolUse", "Stop", "Notification"] {
+        XCTAssertEqual(writer.managedHookKeys, managedHookKeys)
+        for key in managedHookKeys {
             XCTAssertTrue(commands(in: hooks, key: key).contains { $0.contains(binaryPath) }, "missing VibePet entry for \(key)")
         }
     }
@@ -29,8 +43,10 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         try writer.install(arguments: [])
 
         let hooks = try hooksObject(url)
-        let command = try XCTUnwrap(commands(in: hooks, key: "Stop").first { $0.contains(binaryPath) })
-        XCTAssertTrue(command.contains("'\(binaryPath)'"), "binary path must be single-quoted; got: \(command)")
+        for key in managedHookKeys {
+            let command = try XCTUnwrap(commands(in: hooks, key: key).first { $0.contains(binaryPath) })
+            XCTAssertTrue(command.contains("'\(binaryPath)'"), "binary path must be single-quoted for \(key); got: \(command)")
+        }
     }
 
     func testPreservesUserHooksAndSettings() throws {
@@ -45,8 +61,11 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         // User's PreToolUse entry survives alongside VibePet's.
         XCTAssertTrue(commands(in: hooks, key: "PreToolUse").contains("/usr/local/bin/user-audit"))
         XCTAssertTrue(commands(in: hooks, key: "PreToolUse").contains { $0.contains(binaryPath) })
-        // A hook key VibePet does not manage is untouched.
-        XCTAssertEqual(commands(in: hooks, key: "PostToolUse"), ["/usr/local/bin/user-postlog"])
+        // User's PostToolUse survives alongside the new lifecycle entry.
+        let postToolUseCommands = commands(in: hooks, key: "PostToolUse")
+        XCTAssertEqual(postToolUseCommands.count, 2)
+        XCTAssertEqual(postToolUseCommands.first, "/usr/local/bin/user-postlog")
+        XCTAssertTrue(postToolUseCommands[1].contains(binaryPath))
     }
 
     func testInstallIsIdempotent() throws {
@@ -57,24 +76,29 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         try writer.install(arguments: [])
 
         let hooks = try hooksObject(url)
-        let vibePetEntries = commands(in: hooks, key: "PreToolUse").filter { $0.contains(binaryPath) }
-        XCTAssertEqual(vibePetEntries.count, 1, "re-install must not duplicate the VibePet entry")
+        for key in managedHookKeys {
+            let vibePetEntries = commands(in: hooks, key: key).filter { $0.contains(binaryPath) }
+            XCTAssertEqual(vibePetEntries.count, 1, "re-install must not duplicate the VibePet entry for \(key)")
+        }
     }
 
-    func testPreToolUseCarriesDecisionTimeoutButOthersDoNot() throws {
+    func testPreToolUseCarriesDecisionTimeoutAboveAppDeadlineButOthersDoNot() throws {
         let url = try emptyConfig()
         let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
 
         try writer.install(arguments: [])
 
         let hooks = try hooksObject(url)
-        XCTAssertEqual(
-            vibePetTimeout(in: hooks, key: "PreToolUse"),
-            ClaudeCodeConfigWriter.managedDecisionTimeout,
-            "PreToolUse must set a timeout larger than the App countdown so Claude doesn't preempt approval"
+        let preToolUseTimeout = try XCTUnwrap(vibePetTimeout(in: hooks, key: "PreToolUse"))
+        XCTAssertEqual(preToolUseTimeout, ClaudeCodeConfigWriter.managedDecisionTimeout)
+        XCTAssertGreaterThan(
+            TimeInterval(preToolUseTimeout),
+            AppConfig.default.decisionTimeoutSeconds,
+            "PreToolUse timeout must exceed the App decision deadline so Claude does not preempt approval"
         )
-        XCTAssertNil(vibePetTimeout(in: hooks, key: "Stop"), "fire-and-forget hooks need no timeout")
-        XCTAssertNil(vibePetTimeout(in: hooks, key: "Notification"))
+        for key in managedHookKeys where key != "PreToolUse" {
+            XCTAssertNil(vibePetTimeout(in: hooks, key: key), "\(key) is fire-and-forget and should not set a timeout")
+        }
     }
 
     func testUninstallRemovesOnlyVibePetEntries() throws {
@@ -89,8 +113,9 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         let hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
         XCTAssertEqual(commands(in: hooks, key: "PreToolUse"), ["/usr/local/bin/user-audit"], "user hook must remain")
         XCTAssertEqual(commands(in: hooks, key: "PostToolUse"), ["/usr/local/bin/user-postlog"])
-        XCTAssertTrue(commands(in: hooks, key: "Stop").isEmpty, "VibePet-only key is cleared")
-        XCTAssertTrue(commands(in: hooks, key: "Notification").isEmpty)
+        for key in managedHookKeys where key != "PreToolUse" && key != "PostToolUse" {
+            XCTAssertTrue(commands(in: hooks, key: key).isEmpty, "VibePet-only key is cleared: \(key)")
+        }
     }
 
     // MARK: - Helpers

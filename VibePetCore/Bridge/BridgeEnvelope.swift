@@ -5,36 +5,79 @@ public struct BridgeEnvelope: Codable, Equatable, Sendable {
     public let requestId: UUID
     public let source: SourceInfo
     public let content: BubbleContent
+    public let agentEvent: AgentEvent?
 
     public init(
         version: Int = VibePetCore.protocolVersion,
         requestId: UUID,
         source: SourceInfo,
-        content: BubbleContent
+        content: BubbleContent,
+        agentEvent: AgentEvent? = nil
     ) {
         self.version = version
         self.requestId = requestId
         self.source = source
         self.content = content
+        self.agentEvent = agentEvent
     }
 }
 
 public struct SourceInfo: Codable, Equatable, Sendable {
     public let tool: ToolKind
     public let projectName: String?
+    public let sessionID: String
     public let sessionShortId: String?
     public let cwd: String?
+    public let jumpTarget: JumpTarget?
 
     public init(
         tool: ToolKind,
         projectName: String?,
+        sessionID: String? = nil,
         sessionShortId: String?,
-        cwd: String?
+        cwd: String?,
+        jumpTarget: JumpTarget? = nil
     ) {
         self.tool = tool
         self.projectName = projectName
+        self.sessionID = Self.stableFallbackSessionID(tool: tool, sessionID: sessionID, sessionShortId: sessionShortId)
         self.sessionShortId = sessionShortId
         self.cwd = cwd
+        self.jumpTarget = jumpTarget
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tool
+        case projectName
+        case sessionID
+        case sessionShortId
+        case cwd
+        case jumpTarget
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tool = try container.decode(ToolKind.self, forKey: .tool)
+        projectName = try container.decodeIfPresent(String.self, forKey: .projectName)
+        sessionShortId = try container.decodeIfPresent(String.self, forKey: .sessionShortId)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        jumpTarget = try container.decodeIfPresent(JumpTarget.self, forKey: .jumpTarget)
+        let decodedSessionID = try container.decodeIfPresent(String.self, forKey: .sessionID)
+        sessionID = Self.stableFallbackSessionID(tool: tool, sessionID: decodedSessionID, sessionShortId: sessionShortId)
+    }
+
+    private static func stableFallbackSessionID(tool: ToolKind, sessionID: String?, sessionShortId: String?) -> String {
+        sessionID ?? sessionShortId ?? "unknown-\(tool.rawValue)"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(tool, forKey: .tool)
+        try container.encodeIfPresent(projectName, forKey: .projectName)
+        try container.encode(sessionID, forKey: .sessionID)
+        try container.encodeIfPresent(sessionShortId, forKey: .sessionShortId)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try container.encodeIfPresent(jumpTarget, forKey: .jumpTarget)
     }
 }
 

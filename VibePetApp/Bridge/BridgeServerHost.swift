@@ -1,4 +1,5 @@
 import AppKit
+import Dispatch
 import VibePetCore
 
 /// Runs the `BridgeServer` for the running App and routes received envelopes to
@@ -18,9 +19,14 @@ final class BridgeServerHost {
     private let petController: PetController
     private let socketPath: SocketPath
     private let manifestStore: InstallManifestStore
+    private let liveSessionProvider: @Sendable (SessionState) async -> Set<String>
+    private let livenessInterval: TimeInterval
+    private let onSessionStateChange: @MainActor (SessionState) -> Void
+    private var sessionState = SessionState()
     private var server: BridgeServer?
     private var notifyTask: Task<Void, Never>?
     private var decideTask: Task<Void, Never>?
+    private var livenessTask: Task<Void, Never>?
     /// Receiving a real Codex hook event is the runtime evidence that the user
     /// trusted VibePet in `/hooks`; flip the manifest to `trustedActive` once
     /// (M6-5a). Cached so we stop hitting disk after the first activation.
@@ -36,12 +42,20 @@ final class BridgeServerHost {
     init(
         petController: PetController,
         socketPath: SocketPath = SocketPath(),
-        manifestStore: InstallManifestStore? = nil
+        manifestStore: InstallManifestStore? = nil,
+        liveSessionProvider: @escaping @Sendable (SessionState) async -> Set<String> = {
+            await AgentProcessLiveness.liveSessionIDs(in: $0)
+        },
+        livenessInterval: TimeInterval = 5,
+        onSessionStateChange: @escaping @MainActor (SessionState) -> Void = { _ in }
     ) {
         self.petController = petController
         self.socketPath = socketPath
         self.manifestStore = manifestStore
             ?? InstallManifestStore(applicationSupportRoot: socketPath.applicationSupportRoot)
+        self.liveSessionProvider = liveSessionProvider
+        self.livenessInterval = livenessInterval
+        self.onSessionStateChange = onSessionStateChange
     }
 
     /// On the first real Codex event, promote its hook install to `trustedActive`.
@@ -59,17 +73,22 @@ final class BridgeServerHost {
         notifyTask = Task { @MainActor [petController] in
             for await envelope in notifyStream {
                 self.markCodexTrustedIfNeeded(envelope)
-                petController.handle(envelope)
+                self.applyNotification(envelope)
+                if self.shouldPresent(envelope) {
+                    petController.handle(envelope)
+                }
             }
         }
 
         decideTask = Task { @MainActor [petController] in
             for await request in decideStream {
                 self.markCodexTrustedIfNeeded(request.envelope)
+                self.applyDecisionEntry(request.envelope)
                 // Await each decision on its own task so a long wait (default 20s)
                 // does not block subsequent requests or notifications.
                 Task { @MainActor in
                     let response = await petController.requestDecision(for: request.envelope)
+                    self.applyDecisionResolution(response, for: request.envelope)
                     request.reply(response)
                 }
             }
@@ -92,6 +111,8 @@ final class BridgeServerHost {
         }
         self.server = server
 
+        startLivenessSweep()
+
         Task {
             do {
                 try await server.start()
@@ -108,5 +129,274 @@ final class BridgeServerHost {
         notifyTask = nil
         decideTask?.cancel()
         decideTask = nil
+        livenessTask?.cancel()
+        livenessTask = nil
+    }
+
+    var sessionStateSnapshot: SessionState {
+        sessionState
+    }
+
+    func runLivenessSweepOnce() async {
+        let aliveSessionIDs = await liveSessionProvider(sessionState)
+        sessionState.markProcessLiveness(aliveSessionIDs: aliveSessionIDs)
+        sessionState.removeInvisibleSessions()
+        publishSessionState()
+    }
+
+    private func startLivenessSweep() {
+        livenessTask?.cancel()
+        let nanos = UInt64(livenessInterval * 1_000_000_000)
+        livenessTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: nanos)
+                guard !Task.isCancelled else { return }
+                await self?.runLivenessSweepOnce()
+            }
+        }
+    }
+
+    private func applyNotification(_ envelope: BridgeEnvelope) {
+        if let event = envelope.agentEvent {
+            sessionState.apply(rekeyEventIfNeeded(event, source: envelope.source))
+            publishSessionState()
+            return
+        }
+        sessionState.apply(eventFromEnvelope(envelope))
+        publishSessionState()
+    }
+
+    private func rekeyEventIfNeeded(_ event: AgentEvent, source: SourceInfo) -> AgentEvent {
+        guard sessionState.sessionsByID[event.sessionID] == nil else {
+            return event
+        }
+        if let codexThreadID = source.jumpTarget?.codexThreadID,
+           let matchingSession = sessionState.sessionsByID.values.first(where: {
+               $0.tool == source.tool && $0.jumpTarget?.codexThreadID == codexThreadID
+           }) {
+            return event.rekeyed(to: matchingSession.id)
+        }
+        if let cwd = source.cwd,
+           let matchingSession = uniquelyMatchedSession(tool: source.tool, workingDirectory: cwd) {
+            return event.rekeyed(to: matchingSession.id)
+        }
+        return event
+    }
+
+    private func uniquelyMatchedSession(tool: ToolKind, workingDirectory: String) -> AgentSession? {
+        let matches = sessionState.sessionsByID.values.filter {
+            $0.tool == tool && $0.jumpTarget?.workingDirectory == workingDirectory
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private func applyDecisionEntry(_ envelope: BridgeEnvelope) {
+        ensureSessionExists(for: envelope)
+        if let event = envelope.agentEvent {
+            sessionState.apply(event)
+            publishSessionState()
+            return
+        }
+        switch envelope.content {
+        case let .approval(content):
+            sessionState.apply(.permissionRequested(
+                sessionID: envelope.source.sessionID,
+                timestamp: .now,
+                summary: content.title
+            ))
+        case let .question(content):
+            sessionState.apply(.questionAsked(
+                sessionID: envelope.source.sessionID,
+                timestamp: .now,
+                summary: content.title
+            ))
+        case .completion, .status:
+            break
+        }
+        publishSessionState()
+    }
+
+    private func applyDecisionResolution(_ response: BridgeResponse, for envelope: BridgeEnvelope) {
+        switch response {
+        case let .approval(decision):
+            switch decision {
+            case .allowOnce, .allowAlways:
+                sessionState.resolvePermission(sessionID: envelope.source.sessionID, approved: true, at: .now)
+            case .deny:
+                sessionState.resolvePermission(sessionID: envelope.source.sessionID, approved: false, at: .now)
+            }
+        case let .question(answer):
+            sessionState.answerQuestion(
+                sessionID: envelope.source.sessionID,
+                summary: answer.answers.values.sorted().joined(separator: " · "),
+                at: .now
+            )
+        case .defer:
+            sessionState.apply(.actionableStateResolved(
+                sessionID: envelope.source.sessionID,
+                timestamp: .now,
+                summary: "Handled in terminal"
+            ))
+        }
+        publishSessionState()
+    }
+
+    private func eventFromEnvelope(_ envelope: BridgeEnvelope) -> AgentEvent {
+        switch envelope.content {
+        case let .completion(content):
+            return .sessionCompleted(
+                sessionID: envelope.source.sessionID,
+                timestamp: .now,
+                summary: content.markdownSummary,
+                isError: content.isError,
+                isSessionEnd: false
+            )
+        case let .status(content):
+            return .activityUpdated(sessionID: envelope.source.sessionID, timestamp: .now, summary: content.text)
+        case let .approval(content):
+            return .permissionRequested(sessionID: envelope.source.sessionID, timestamp: .now, summary: content.title)
+        case let .question(content):
+            return .questionAsked(sessionID: envelope.source.sessionID, timestamp: .now, summary: content.title)
+        }
+    }
+
+    private func shouldPresent(_ envelope: BridgeEnvelope) -> Bool {
+        guard let event = envelope.agentEvent else {
+            return true
+        }
+        switch event {
+        case .sessionStarted:
+            return false
+        case .activityUpdated, .permissionRequested, .questionAsked, .sessionCompleted, .jumpTargetUpdated, .actionableStateResolved:
+            return true
+        }
+    }
+
+    private func publishSessionState() {
+        if sessionState.activeActionableSession != nil {
+            petController.sync(with: sessionState)
+        } else if let sessionID = sessionState.nextUngreetedRunningSessionID, petController.greet() {
+            sessionState.markGreetingShown(for: sessionID)
+        } else {
+            petController.sync(with: sessionState)
+        }
+        onSessionStateChange(sessionState)
+    }
+
+    private func ensureSessionExists(for envelope: BridgeEnvelope) {
+        guard sessionState.sessionsByID[envelope.source.sessionID] == nil else {
+            return
+        }
+        sessionState.apply(.sessionStarted(
+            sessionID: envelope.source.sessionID,
+            timestamp: .now,
+            title: envelope.source.projectName ?? toolTitle(envelope.source.tool),
+            tool: envelope.source.tool,
+            summary: "Session started",
+            jumpTarget: envelope.source.jumpTarget
+        ))
+    }
+
+    private func toolTitle(_ tool: ToolKind) -> String {
+        switch tool {
+        case .claudeCode:
+            "Claude Code"
+        case .codex:
+            "Codex"
+        }
+    }
+}
+
+enum AgentProcessLiveness {
+    struct ProcessRow: Equatable, Sendable {
+        var tty: String
+        var command: String
+    }
+
+    static func liveSessionIDs(in state: SessionState) async -> Set<String> {
+        let rows = await Task.detached(priority: .utility) {
+            runningProcessRows()
+        }.value
+        return liveSessionIDs(in: state, rows: rows)
+    }
+
+    static func liveSessionIDs(in state: SessionState, rows: [ProcessRow]) -> Set<String> {
+        var alive: Set<String> = []
+
+        for session in state.sessionsByID.values {
+            if session.phase.requiresAttention {
+                alive.insert(session.id)
+                continue
+            }
+            if session.isSessionEnded {
+                continue
+            }
+            guard let tty = session.jumpTarget?.terminalTTY, !tty.isEmpty else {
+                alive.insert(session.id)
+                continue
+            }
+
+            let targetTTY = normalizedTTY(tty)
+            if rows.contains(where: { row in
+                normalizedTTY(row.tty) == targetTTY && isAgentCommand(row.command, for: session.tool)
+            }) {
+                alive.insert(session.id)
+            }
+        }
+
+        return alive
+    }
+
+    private static func runningProcessRows() -> [ProcessRow] {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-axo", "tty=,command="]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            let exitGroup = DispatchGroup()
+            exitGroup.enter()
+            process.terminationHandler = { _ in
+                exitGroup.leave()
+            }
+            try process.run()
+            guard exitGroup.wait(timeout: .now() + 1) == .success else {
+                process.terminate()
+                return []
+            }
+            guard process.terminationStatus == 0 else {
+                return []
+            }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8) else {
+                return []
+            }
+            return output.split(separator: "\n").compactMap { line in
+                let parts = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+                guard parts.count == 2 else { return nil }
+                return ProcessRow(tty: String(parts[0]), command: String(parts[1]))
+            }
+        } catch {
+            return []
+        }
+    }
+
+    private static func normalizedTTY(_ tty: String) -> String {
+        tty.replacingOccurrences(of: "/dev/", with: "")
+    }
+
+    private static func isAgentCommand(_ command: String, for tool: ToolKind) -> Bool {
+        let lowercased = command.lowercased()
+        guard !lowercased.contains("vibepethooks") else {
+            return false
+        }
+        switch tool {
+        case .claudeCode:
+            return lowercased.contains("claude")
+        case .codex:
+            return lowercased.contains("codex")
+        }
     }
 }

@@ -46,7 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `PetController`. The controller anchors bubbles to wherever the (visible)
     /// pet currently sits through `PetWindowSurface`; when hidden, the event drops.
     private func startBridge() {
-        let host = BridgeServerHost(petController: petController)
+        let host = BridgeServerHost(
+            petController: petController,
+            onSessionStateChange: { [weak self] _ in
+                self?.statusItemController?.rebuild()
+            }
+        )
         bridgeHost = host
         host.start()
     }
@@ -65,9 +70,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openSettings: { [weak self] in self?.presentSettings() },
             quit: { NSApp.terminate(nil) }
         )
-        statusItemController = StatusItemController(actions: actions) { [weak self] in
-            self?.petMenuEntries() ?? []
-        }
+        statusItemController = StatusItemController(
+            actions: actions,
+            petsProvider: { [weak self] in self?.petMenuEntries() ?? [] },
+            sessionSummaryProvider: { [weak self] in
+                guard let state = self?.bridgeHost?.sessionStateSnapshot else {
+                    return SessionMenuSummary(activeCount: 0, attentionCount: 0)
+                }
+                return SessionMenuSummary.derive(from: state)
+            }
+        )
     }
 
     private func petMenuEntries() -> [PetMenuEntry] {

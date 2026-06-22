@@ -1,10 +1,24 @@
 import AppKit
+import VibePetCore
 
 /// One entry in the "switch pet" submenu.
 struct PetMenuEntry {
     let id: String
     let title: String
     let isActive: Bool
+}
+
+struct SessionMenuSummary: Equatable {
+    let activeCount: Int
+    let attentionCount: Int
+
+    static func derive(from state: SessionState) -> SessionMenuSummary {
+        SessionMenuSummary(activeCount: state.visibleSessions.count, attentionCount: state.attentionCount)
+    }
+
+    var title: String {
+        "会话：\(activeCount) 个活跃，\(attentionCount) 个待处理"
+    }
 }
 
 /// Owns the menu-bar `NSStatusItem` and routes each item to a host-supplied
@@ -22,10 +36,16 @@ final class StatusItemController {
     private let statusItem: NSStatusItem
     private let actions: Actions
     private let petsProvider: () -> [PetMenuEntry]
+    private let sessionSummaryProvider: () -> SessionMenuSummary
 
-    init(actions: Actions, petsProvider: @escaping () -> [PetMenuEntry]) {
+    init(
+        actions: Actions,
+        petsProvider: @escaping () -> [PetMenuEntry],
+        sessionSummaryProvider: @escaping () -> SessionMenuSummary = { SessionMenuSummary(activeCount: 0, attentionCount: 0) }
+    ) {
         self.actions = actions
         self.petsProvider = petsProvider
+        self.sessionSummaryProvider = sessionSummaryProvider
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "VibePet")
@@ -36,6 +56,10 @@ final class StatusItemController {
     /// Rebuild the menu so the "switch pet" submenu reflects current assets.
     func rebuild() {
         let menu = NSMenu()
+        let sessionSummary = NSMenuItem(title: sessionSummaryProvider().title, action: nil, keyEquivalent: "")
+        sessionSummary.isEnabled = false
+        menu.addItem(sessionSummary)
+        menu.addItem(.separator())
         menu.addItem(ActionMenuItem(title: "显示 / 隐藏宠物") { [weak self] in self?.actions.togglePetVisibility() })
         menu.addItem(switchPetItem())
         menu.addItem(ActionMenuItem(title: "导入新照片…") { [weak self] in self?.actions.importNewPhoto() })

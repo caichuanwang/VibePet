@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "9f8e7d6c5b4a3210",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "prompt": "Run the tests"
+}

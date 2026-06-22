@@ -9,7 +9,20 @@ import Foundation
 public struct ClaudeCodeConfigWriter: ToolConfigWriter {
     public let tool: ToolKind = .claudeCode
     public let configURL: URL
-    public let managedHookKeys = ["PreToolUse", "Stop", "Notification"]
+    public let managedHookKeys = [
+        "PreToolUse",
+        "Stop",
+        "Notification",
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "SubagentStart",
+        "SubagentStop",
+        "SessionEnd",
+        "StopFailure",
+        "PermissionDenied",
+        "PreCompact",
+    ]
 
     private let hookBinaryPath: String
 

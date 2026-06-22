@@ -46,9 +46,11 @@ public struct CodexAdapter: ToolAdapter {
         // VibePet installs the `Stop` hook instead, but notify is still parsed for
         // robustness if a user wires it up.
         if (object["type"] as? String) == "agent-turn-complete" {
+            let source = makeSource(from: object, sessionKeys: ["session_id", "thread-id", "thread_id", "turn-id"])
             return makeCompletionEnvelope(
                 summary: (object["last-assistant-message"] as? String).flatMap(nonEmpty),
-                source: makeSource(from: object, sessionKeys: ["thread-id", "turn-id"])
+                source: source,
+                agentEvent: makeCompletionEvent(from: object, source: source)
             )
         }
 
@@ -61,14 +63,35 @@ public struct CodexAdapter: ToolAdapter {
         case "Stop":
             // Turn-completion: VibePet registers a Codex `Stop` hook (open-vibe-island
             // pattern) and shows the last assistant message as a completion.
+            let source = makeSource(from: object)
             return makeCompletionEnvelope(
                 summary: (object["last_assistant_message"] as? String).flatMap(nonEmpty),
-                source: makeSource(from: object)
+                source: source,
+                agentEvent: makeAgentEvent(from: object, source: source)
+            )
+        case "SessionStart", "UserPromptSubmit":
+            let source = makeSource(from: object)
+            guard let agentEvent = makeAgentEvent(from: object, source: source) else { return nil }
+            return makeEnvelope(
+                source: source,
+                content: .status(StatusContent(text: lifecycleSummary(for: event, object: object))),
+                agentEvent: agentEvent
             )
         default:
             // Other lifecycle hooks are outside the MVP subset.
             return nil
         }
+    }
+
+    public func parseAgentEvent(stdin: Data, env: [String: String]) throws -> AgentEvent? {
+        guard let object = try? JSONSerialization.jsonObject(with: stdin) as? [String: Any] else {
+            return nil
+        }
+        if (object["type"] as? String) == "agent-turn-complete" {
+            let source = makeSource(from: object, sessionKeys: ["session_id", "thread-id", "thread_id", "turn-id"])
+            return makeCompletionEvent(from: object, source: source)
+        }
+        return makeAgentEvent(from: object, source: makeSource(from: object))
     }
 
     public func encodeResponse(_ response: BridgeResponse, for envelope: BridgeEnvelope) -> Data {
@@ -90,6 +113,7 @@ public struct CodexAdapter: ToolAdapter {
             return nil
         }
         let source = makeSource(from: object)
+        let agentEvent = makeAgentEvent(from: object, source: source)
         let input = object["tool_input"] as? [String: Any] ?? [:]
 
         if Self.freeformInputTools.contains(toolName) {
@@ -101,7 +125,7 @@ public struct CodexAdapter: ToolAdapter {
                 alwaysAllow: nil,
                 requiresTerminalApproval: true
             )
-            return makeEnvelope(source: source, content: .approval(content))
+            return makeEnvelope(source: source, content: .approval(content), agentEvent: agentEvent)
         }
 
         let preview = Self.actionPreview(toolName: toolName, input: input)
@@ -115,7 +139,7 @@ public struct CodexAdapter: ToolAdapter {
             alwaysAllow: nil,
             requiresTerminalApproval: false
         )
-        return makeEnvelope(source: source, content: .approval(content))
+        return makeEnvelope(source: source, content: .approval(content), agentEvent: agentEvent)
     }
 
     private static func isShellTool(_ toolName: String) -> Bool {
@@ -172,10 +196,15 @@ public struct CodexAdapter: ToolAdapter {
 
     // MARK: - completion (Stop hook / notify)
 
-    private func makeCompletionEnvelope(summary: String?, source: SourceInfo) -> BridgeEnvelope {
+    private func makeCompletionEnvelope(
+        summary: String?,
+        source: SourceInfo,
+        agentEvent: AgentEvent?
+    ) -> BridgeEnvelope {
         makeEnvelope(
             source: source,
-            content: .completion(CompletionContent(markdownSummary: summary ?? Self.completionFallback, isError: false))
+            content: .completion(CompletionContent(markdownSummary: summary ?? Self.completionFallback, isError: false)),
+            agentEvent: agentEvent
         )
     }
 
@@ -211,22 +240,120 @@ public struct CodexAdapter: ToolAdapter {
     private func makeSource(from object: [String: Any], sessionKeys: [String] = ["session_id"]) -> SourceInfo {
         let cwd = (object["cwd"] as? String).flatMap(nonEmpty)
         let projectName = cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
-        let sessionShortId = sessionKeys
+        let sessionID = sessionKeys
             .lazy
             .compactMap { (object[$0] as? String).flatMap(nonEmpty) }
             .first
+        let sessionShortId = sessionID
             .map { String($0.prefix(6)) }
+        let threadID = ["thread_id", "thread-id", "threadId"]
+            .lazy
+            .compactMap { (object[$0] as? String).flatMap(nonEmpty) }
+            .first
+        let jumpTarget: JumpTarget? = (threadID != nil || cwd != nil) ? {
+            JumpTarget(
+                terminalApp: "Codex",
+                workingDirectory: cwd,
+                codexThreadID: threadID
+            )
+        }() : nil
 
         return SourceInfo(
             tool: .codex,
             projectName: projectName,
+            sessionID: sessionID,
             sessionShortId: sessionShortId,
-            cwd: cwd
+            cwd: cwd,
+            jumpTarget: jumpTarget
         )
     }
 
-    private func makeEnvelope(source: SourceInfo, content: BubbleContent) -> BridgeEnvelope {
-        BridgeEnvelope(requestId: UUID(), source: source, content: content)
+    private func makeEnvelope(
+        source: SourceInfo,
+        content: BubbleContent,
+        agentEvent: AgentEvent? = nil
+    ) -> BridgeEnvelope {
+        BridgeEnvelope(requestId: UUID(), source: source, content: content, agentEvent: agentEvent)
+    }
+
+    private func makeAgentEvent(from object: [String: Any], source: SourceInfo) -> AgentEvent? {
+        guard
+            let event = object["hook_event_name"] as? String,
+            let sessionID = (object["session_id"] as? String).flatMap(nonEmpty)
+        else {
+            return nil
+        }
+        let timestamp = Date()
+
+        switch event {
+        case "SessionStart":
+            return .sessionStarted(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                title: source.projectName ?? "Codex",
+                tool: .codex,
+                summary: lifecycleSummary(for: event, object: object),
+                jumpTarget: source.jumpTarget
+            )
+        case "UserPromptSubmit":
+            return .activityUpdated(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                summary: lifecycleSummary(for: event, object: object)
+            )
+        case "PermissionRequest":
+            return .permissionRequested(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                summary: lifecycleSummary(for: event, object: object)
+            )
+        case "Stop":
+            return .sessionCompleted(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                summary: (object["last_assistant_message"] as? String).flatMap(nonEmpty) ?? Self.completionFallback,
+                isError: (object["is_error"] as? Bool) ?? false,
+                isSessionEnd: false
+            )
+        default:
+            return nil
+        }
+    }
+
+    private func makeCompletionEvent(from object: [String: Any], source: SourceInfo) -> AgentEvent? {
+        let keys = ["session_id", "thread-id", "thread_id", "turn-id"]
+        guard let sessionID = keys.lazy.compactMap({ (object[$0] as? String).flatMap(nonEmpty) }).first else {
+            return nil
+        }
+        return .sessionCompleted(
+            sessionID: sessionID,
+            timestamp: Date(),
+            summary: (object["last-assistant-message"] as? String).flatMap(nonEmpty) ?? Self.completionFallback,
+            isError: false,
+            isSessionEnd: false
+        )
+    }
+
+    private func lifecycleSummary(for event: String, object: [String: Any]) -> String {
+        if let prompt = (object["prompt"] as? String).flatMap(nonEmpty) {
+            return "User prompt: \(prompt)"
+        }
+        if let toolName = (object["tool_name"] as? String).flatMap(nonEmpty) {
+            return "Codex \(event): \(toolName)"
+        }
+        if let message = (object["message"] as? String).flatMap(nonEmpty) {
+            return message
+        }
+        switch event {
+        case "SessionStart":
+            return "Codex session started"
+        case "UserPromptSubmit":
+            return "Codex received a prompt"
+        case "PermissionRequest":
+            return "Codex needs approval"
+        default:
+            return "Codex activity"
+        }
     }
 }
 

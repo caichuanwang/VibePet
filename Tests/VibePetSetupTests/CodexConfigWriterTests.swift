@@ -8,6 +8,7 @@ import XCTest
 /// idempotent; uninstall removes only VibePet's entries and the managed feature flag.
 final class CodexConfigWriterTests: XCTestCase {
     private let binaryPath = "/Users/dev/Library/Application Support/VibePet/bin/VibePetHooks"
+    private let managedHookKeys = ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit"]
 
     func testInstallWritesManagedHooksWithMarkerAndToolArg() throws {
         let dir = try tempCodexDir()
@@ -16,7 +17,8 @@ final class CodexConfigWriterTests: XCTestCase {
         try writer.install(arguments: ["--tool", "codex"])
 
         let hooks = try hooksObject(dir)
-        for event in ["PermissionRequest", "Stop"] {
+        XCTAssertEqual(writer.managedHookKeys, managedHookKeys)
+        for event in managedHookKeys {
             let groupHooks = innerHooks(in: hooks, event: event)
             XCTAssertEqual(groupHooks.count, 1, "one managed group for \(event)")
             let hook = try XCTUnwrap(groupHooks.first)
@@ -24,6 +26,20 @@ final class CodexConfigWriterTests: XCTestCase {
             let command = try XCTUnwrap(hook["command"] as? String)
             XCTAssertTrue(command.contains(binaryPath))
             XCTAssertTrue(command.contains("--tool codex"), "command must select CodexAdapter")
+        }
+    }
+
+    func testQuotesBinaryPathForEveryManagedHook() throws {
+        let dir = try tempCodexDir()
+        let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
+
+        try writer.install(arguments: ["--tool", "codex"])
+
+        let hooks = try hooksObject(dir)
+        for event in managedHookKeys {
+            let hook = try XCTUnwrap(innerHooks(in: hooks, event: event).first)
+            let command = try XCTUnwrap(hook["command"] as? String)
+            XCTAssertTrue(command.contains("'\(binaryPath)'"), "binary path must be single-quoted for \(event); got: \(command)")
         }
     }
 
@@ -51,7 +67,9 @@ final class CodexConfigWriterTests: XCTestCase {
         let hooks = try hooksObject(dir)
         // User's PreToolUse hook survives; VibePet's managed events are added.
         XCTAssertEqual(innerHooks(in: hooks, event: "PreToolUse").first?["command"] as? String, "/usr/local/bin/user-codex-hook")
-        XCTAssertFalse(innerHooks(in: hooks, event: "PermissionRequest").isEmpty)
+        for event in managedHookKeys {
+            XCTAssertFalse(innerHooks(in: hooks, event: event).isEmpty, "\(event) managed hook added")
+        }
     }
 
     func testInstallIsIdempotent() throws {
@@ -61,7 +79,10 @@ final class CodexConfigWriterTests: XCTestCase {
         try writer.install(arguments: ["--tool", "codex"])
         try writer.install(arguments: ["--tool", "codex"])
 
-        XCTAssertEqual(innerHooks(in: try hooksObject(dir), event: "PermissionRequest").count, 1, "no duplicate managed group")
+        let hooks = try hooksObject(dir)
+        for event in managedHookKeys {
+            XCTAssertEqual(innerHooks(in: hooks, event: event).count, 1, "no duplicate managed group for \(event)")
+        }
         let toml = try String(contentsOf: dir.appendingPathComponent("config.toml"), encoding: .utf8)
         XCTAssertEqual(toml.components(separatedBy: "hooks = true").count - 1, 1, "feature flag not duplicated")
     }
@@ -76,8 +97,9 @@ final class CodexConfigWriterTests: XCTestCase {
         try writer.uninstall()
 
         let hooks = try hooksObject(dir)
-        XCTAssertTrue(innerHooks(in: hooks, event: "PermissionRequest").isEmpty, "managed hook removed")
-        XCTAssertTrue(innerHooks(in: hooks, event: "Stop").isEmpty, "managed hook removed")
+        for event in managedHookKeys {
+            XCTAssertTrue(innerHooks(in: hooks, event: event).isEmpty, "managed hook removed: \(event)")
+        }
         XCTAssertEqual(innerHooks(in: hooks, event: "PreToolUse").first?["command"] as? String, "/usr/local/bin/user-codex-hook", "user hook preserved")
 
         let toml = try String(contentsOf: dir.appendingPathComponent("config.toml"), encoding: .utf8)

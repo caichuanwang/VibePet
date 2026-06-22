@@ -60,6 +60,65 @@ final class BridgeEnvelopeCodecTests: XCTestCase {
         try assertRoundTrip(envelope)
     }
 
+    func testSourceInfoPreservesStableSessionIDAndJumpTarget() throws {
+        let envelope = BridgeEnvelope(
+            version: 1,
+            requestId: UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!,
+            source: SourceInfo(
+                tool: .codex,
+                projectName: "VibePet",
+                sessionID: "codex-session-full",
+                sessionShortId: "codex-",
+                cwd: "/tmp/VibePet",
+                jumpTarget: JumpTarget(
+                    terminalApp: "Terminal",
+                    workspaceName: "VibePet",
+                    paneTitle: "Codex",
+                    workingDirectory: "/tmp/VibePet",
+                    terminalTTY: "/dev/ttys002",
+                    codexThreadID: "thread-1"
+                )
+            ),
+            content: .status(StatusContent(text: "Working"))
+        )
+
+        let data = try encoder.encode(envelope)
+        let decoded = try decoder.decode(BridgeEnvelope.self, from: data)
+
+        XCTAssertEqual(decoded, envelope)
+        XCTAssertEqual(decoded.source.sessionID, "codex-session-full")
+        XCTAssertEqual(decoded.source.sessionShortId, "codex-")
+        XCTAssertNotEqual(decoded.source.sessionID, decoded.source.sessionShortId)
+        XCTAssertEqual(decoded.source.jumpTarget?.codexThreadID, "thread-1")
+    }
+
+    func testSourceInfoMissingSessionIDUsesDeterministicFallback() throws {
+        let json = """
+        {
+          "version": 1,
+          "requestId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "source": {
+            "tool": "codex",
+            "projectName": "VibePet",
+            "cwd": "/tmp/VibePet"
+          },
+          "content": {
+            "type": "status",
+            "status": {
+              "text": "Working"
+            }
+          }
+        }
+        """
+        let data = Data(json.utf8)
+
+        let first = try decoder.decode(BridgeEnvelope.self, from: data)
+        let second = try decoder.decode(BridgeEnvelope.self, from: data)
+
+        XCTAssertEqual(first.source.sessionID, "unknown-codex")
+        XCTAssertEqual(second.source.sessionID, first.source.sessionID)
+    }
+
     func testActionPreviewVariantsRoundTrip() throws {
         let previews: [ActionPreview] = [
             .command(text: "swift test"),
@@ -116,6 +175,7 @@ final class BridgeEnvelopeCodecTests: XCTestCase {
             source: SourceInfo(
                 tool: .claudeCode,
                 projectName: "VibePet",
+                sessionID: "session-full-abc123",
                 sessionShortId: "abc123",
                 cwd: "/tmp/VibePet"
             ),

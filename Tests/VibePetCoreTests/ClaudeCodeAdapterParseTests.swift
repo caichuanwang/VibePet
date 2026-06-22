@@ -105,16 +105,111 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
 
         XCTAssertEqual(envelope.source.tool, .claudeCode)
         XCTAssertEqual(envelope.source.projectName, "VibePet")
+        XCTAssertEqual(envelope.source.sessionID, "a1b2c3d4e5f6")
         XCTAssertEqual(envelope.source.sessionShortId, "a1b2c3")
         XCTAssertEqual(envelope.source.cwd, "/Users/dev/Projects/VibePet")
+    }
+
+    // MARK: - Lifecycle AgentEvent
+
+    func testSessionStartBecomesAgentEvent() throws {
+        let adapter = ClaudeCodeAdapter()
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("session-start.json"), env: [:]))
+
+        guard case let .sessionStarted(sessionID, _, title, tool, summary, _) = envelope.agentEvent else {
+            return XCTFail("Expected sessionStarted, got \(String(describing: envelope.agentEvent))")
+        }
+        XCTAssertEqual(sessionID, "a1b2c3d4e5f6")
+        XCTAssertEqual(title, "VibePet")
+        XCTAssertEqual(tool, .claudeCode)
+        XCTAssertEqual(summary, "Claude Code session started")
+        XCTAssertFalse(envelope.content.needsResponse)
+    }
+
+    func testLifecycleActivityEventsBecomeActivityUpdated() throws {
+        let adapter = ClaudeCodeAdapter()
+        let fixtureNames = [
+            "user-prompt-submit.json",
+            "post-tool-use.json",
+            "subagent-start.json",
+            "subagent-stop.json",
+            "pre-compact.json",
+            "notification.json",
+        ]
+
+        for name in fixtureNames {
+            let event = try XCTUnwrap(adapter.parseAgentEvent(stdin: fixture(name), env: [:]), name)
+            guard case let .activityUpdated(sessionID, _, summary) = event else {
+                return XCTFail("Expected activityUpdated for \(name), got \(event)")
+            }
+            XCTAssertEqual(sessionID, "a1b2c3d4e5f6")
+            XCTAssertFalse(summary.isEmpty)
+        }
+    }
+
+    func testPreToolUseMapsDecisionAgentEvents() throws {
+        let adapter = ClaudeCodeAdapter()
+
+        let approvalEvent = try XCTUnwrap(adapter.parseEvent(stdin: fixture("pretooluse-bash.json"), env: [:])?.agentEvent)
+        let questionEvent = try XCTUnwrap(adapter.parseEvent(stdin: fixture("ask-user-question.json"), env: [:])?.agentEvent)
+
+        guard case let .permissionRequested(approvalSessionID, _, approvalSummary) = approvalEvent else {
+            return XCTFail("Expected permissionRequested, got \(approvalEvent)")
+        }
+        guard case let .questionAsked(questionSessionID, _, questionSummary) = questionEvent else {
+            return XCTFail("Expected questionAsked, got \(questionEvent)")
+        }
+        XCTAssertEqual(approvalSessionID, "a1b2c3d4e5f6")
+        XCTAssertEqual(questionSessionID, "a1b2c3d4e5f6")
+        XCTAssertTrue(approvalSummary.contains("Bash"))
+        XCTAssertTrue(questionSummary.contains("AskUserQuestion"))
+    }
+
+    func testStopFailureAndSessionEndCompletionFlags() throws {
+        let adapter = ClaudeCodeAdapter()
+
+        let failure = try XCTUnwrap(adapter.parseAgentEvent(stdin: fixture("stop-failure.json"), env: [:]))
+        let end = try XCTUnwrap(adapter.parseAgentEvent(stdin: fixture("session-end.json"), env: [:]))
+
+        guard case let .sessionCompleted(_, _, _, failureIsError, failureIsEnd) = failure else {
+            return XCTFail("Expected sessionCompleted, got \(failure)")
+        }
+        guard case let .sessionCompleted(_, _, _, endIsError, endIsEnd) = end else {
+            return XCTFail("Expected sessionCompleted, got \(end)")
+        }
+        XCTAssertTrue(failureIsError)
+        XCTAssertFalse(failureIsEnd)
+        XCTAssertFalse(endIsError)
+        XCTAssertTrue(endIsEnd)
+    }
+
+    func testPermissionDeniedBecomesActionableStateResolved() throws {
+        let adapter = ClaudeCodeAdapter()
+        let event = try XCTUnwrap(adapter.parseAgentEvent(stdin: fixture("permission-denied.json"), env: [:]))
+
+        guard case let .actionableStateResolved(sessionID, _, summary) = event else {
+            return XCTFail("Expected actionableStateResolved, got \(event)")
+        }
+        XCTAssertEqual(sessionID, "a1b2c3d4e5f6")
+        XCTAssertEqual(summary, "Permission was denied in the terminal")
+    }
+
+    func testMalformedLifecyclePayloadFailsOpen() throws {
+        let adapter = ClaudeCodeAdapter()
+        let missingSessionID = try json([
+            "hook_event_name": "SessionStart",
+            "cwd": "/tmp/VibePet",
+        ])
+
+        XCTAssertNil(try adapter.parseAgentEvent(stdin: missingSessionID, env: [:]))
+        XCTAssertNil(try adapter.parseEvent(stdin: missingSessionID, env: [:]))
     }
 
     // MARK: - Out-of-scope events
 
     func testUnhandledEventReturnsNil() throws {
-        // PreToolUse is now handled (M4); an unrelated event still returns nil.
         let adapter = ClaudeCodeAdapter()
-        let unrelated = try json(["hook_event_name": "SessionStart"])
+        let unrelated = try json(["hook_event_name": "SomethingElse"])
         XCTAssertNil(try adapter.parseEvent(stdin: unrelated, env: [:]))
     }
 

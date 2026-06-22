@@ -5,6 +5,21 @@ import XCTest
 /// to each tool (so uninstall is precise and install is idempotent). It round-trips
 /// as JSON and returns an empty default when absent.
 final class InstallManifestTests: XCTestCase {
+    private let claudeManagedHookKeys = [
+        "PreToolUse",
+        "Stop",
+        "Notification",
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "SubagentStart",
+        "SubagentStop",
+        "SessionEnd",
+        "StopFailure",
+        "PermissionDenied",
+        "PreCompact",
+    ]
+
     func testDefaultWhenMissing() throws {
         let root = try TempRoot()
         let store = InstallManifestStore(applicationSupportRoot: root.url)
@@ -23,7 +38,7 @@ final class InstallManifestTests: XCTestCase {
             installed: true,
             activationState: .trustedActive,
             settingsPath: "~/.claude/settings.json",
-            writtenHooks: ["PreToolUse", "Stop", "Notification"],
+            writtenHooks: claudeManagedHookKeys,
             backupPath: "backups/settings.json.bak"
         )
 
@@ -31,6 +46,6 @@ final class InstallManifestTests: XCTestCase {
         let reloaded = store.read()
 
         XCTAssertEqual(reloaded, manifest)
-        XCTAssertEqual(reloaded.tools[ToolKind.claudeCode.rawValue]?.writtenHooks, ["PreToolUse", "Stop", "Notification"])
+        XCTAssertEqual(reloaded.tools[ToolKind.claudeCode.rawValue]?.writtenHooks, claudeManagedHookKeys)
     }
 }

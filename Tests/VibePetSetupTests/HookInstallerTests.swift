@@ -6,6 +6,21 @@ import XCTest
 /// installedNeedsTrust / enabled / outdated. Codex starts needs-trust; Claude is
 /// active once written.
 final class HookInstallerTests: XCTestCase {
+    private let claudeManagedHookKeys = [
+        "PreToolUse",
+        "Stop",
+        "Notification",
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "SubagentStart",
+        "SubagentStop",
+        "SessionEnd",
+        "StopFailure",
+        "PermissionDenied",
+        "PreCompact",
+    ]
+
     func testInstallWritesBinaryConfigAndManifest() throws {
         let root = try TempRoot()
         let configURL = root.url.appendingPathComponent("claude/settings.json")
@@ -17,7 +32,7 @@ final class HookInstallerTests: XCTestCase {
 
         XCTAssertTrue(record.installed)
         XCTAssertEqual(record.activationState, .trustedActive)
-        XCTAssertEqual(record.writtenHooks, ["PreToolUse", "Stop", "Notification"])
+        XCTAssertEqual(record.writtenHooks, claudeManagedHookKeys)
         XCTAssertTrue(FileManager.default.fileExists(atPath: InstallPaths.hookBinaryURL(applicationSupportRoot: root.url).path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: configURL.path))
         XCTAssertEqual(installer.status(tool: .claudeCode), .enabled)

@@ -56,16 +56,46 @@ public struct HookRuntime: Sendable {
     }
 
     public func run(stdin: Data, env: [String: String]) async -> Outcome {
+        let parsedEvent: AgentEvent?
         let parsed: BridgeEnvelope?
         do {
+            parsedEvent = try adapter.parseAgentEvent(stdin: stdin, env: env)
             parsed = try adapter.parseEvent(stdin: stdin, env: env)
         } catch {
             return .deferred
         }
 
-        guard let envelope = parsed else {
+        var envelope: BridgeEnvelope
+        if let parsed {
+            envelope = parsed
+        } else {
             // The adapter ignores this event; nothing to deliver.
-            return .deferred
+            guard let parsedEvent else {
+                return .deferred
+            }
+            envelope = BridgeEnvelope(
+                requestId: UUID(),
+                source: SourceInfo(
+                    tool: adapter.tool,
+                    projectName: nil,
+                    sessionID: parsedEvent.sessionID,
+                    sessionShortId: String(parsedEvent.sessionID.prefix(6)),
+                    cwd: nil
+                ),
+                content: .status(StatusContent(text: "Session activity")),
+                agentEvent: parsedEvent
+            )
+            return await runNotification(envelope)
+        }
+
+        if envelope.agentEvent == nil, let parsedEvent {
+            envelope = BridgeEnvelope(
+                version: envelope.version,
+                requestId: envelope.requestId,
+                source: envelope.source,
+                content: envelope.content,
+                agentEvent: parsedEvent
+            )
         }
 
         if envelope.content.needsResponse {

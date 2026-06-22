@@ -46,30 +46,47 @@ public struct ClaudeCodeAdapter: ToolAdapter {
         }
 
         let source = makeSource(from: object)
+        let agentEvent = makeAgentEvent(from: object, source: source)
 
         switch eventName {
+        case "SessionStart", "UserPromptSubmit", "PostToolUse", "SubagentStart", "SubagentStop", "PreCompact", "PermissionDenied", "SessionEnd", "StopFailure":
+            guard let agentEvent else { return nil }
+            return makeEnvelope(
+                source: source,
+                content: lifecycleContent(for: eventName, object: object),
+                agentEvent: agentEvent
+            )
         case "Stop":
             let summary = resolveCompletionSummary(from: object)
             let isError = (object["is_error"] as? Bool) ?? false
             return makeEnvelope(
                 source: source,
-                content: .completion(CompletionContent(markdownSummary: summary, isError: isError))
+                content: .completion(CompletionContent(markdownSummary: summary, isError: isError)),
+                agentEvent: agentEvent
             )
         case "Notification":
             let message = (object["message"] as? String).flatMap(nonEmpty) ?? Self.notificationFallback
             return makeEnvelope(
                 source: source,
-                content: .status(StatusContent(text: singleLine(message)))
+                content: .status(StatusContent(text: singleLine(message))),
+                agentEvent: agentEvent
             )
         case "PreToolUse":
             if (object["tool_name"] as? String).flatMap(nonEmpty) == "AskUserQuestion" {
-                return makeQuestionEnvelope(from: object, source: source)
+                return makeQuestionEnvelope(from: object, source: source, agentEvent: agentEvent)
             }
-            return makeApprovalEnvelope(from: object, source: source)
+            return makeApprovalEnvelope(from: object, source: source, agentEvent: agentEvent)
         default:
             // Events outside the supported subset.
             return nil
         }
+    }
+
+    public func parseAgentEvent(stdin: Data, env: [String: String]) throws -> AgentEvent? {
+        guard let object = try? JSONSerialization.jsonObject(with: stdin) as? [String: Any] else {
+            return nil
+        }
+        return makeAgentEvent(from: object, source: makeSource(from: object))
     }
 
     public func encodeResponse(_ response: BridgeResponse, for envelope: BridgeEnvelope) -> Data {
@@ -91,7 +108,11 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     /// Builds an `.approval` envelope from a `PreToolUse` event. `AskUserQuestion`
     /// is routed to the question path by the caller, so the guard here is
     /// defensive only.
-    private func makeApprovalEnvelope(from object: [String: Any], source: SourceInfo) -> BridgeEnvelope? {
+    private func makeApprovalEnvelope(
+        from object: [String: Any],
+        source: SourceInfo,
+        agentEvent: AgentEvent?
+    ) -> BridgeEnvelope? {
         guard let toolName = (object["tool_name"] as? String).flatMap(nonEmpty) else {
             return nil
         }
@@ -114,7 +135,7 @@ public struct ClaudeCodeAdapter: ToolAdapter {
             alwaysAllow: nil,
             requiresTerminalApproval: false
         )
-        return makeEnvelope(source: source, content: .approval(content))
+        return makeEnvelope(source: source, content: .approval(content), agentEvent: agentEvent)
     }
 
     /// Assembles an `ActionPreview` from a tool's `tool_input` (verified field
@@ -172,7 +193,11 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     /// "allow"`, so VibePet answers it in-bubble and writes the answer back.
     /// Field names per the `AskUserQuestion` input schema: `questions[].{question,
     /// header, multiSelect, options[].{label, description}}`.
-    private func makeQuestionEnvelope(from object: [String: Any], source: SourceInfo) -> BridgeEnvelope? {
+    private func makeQuestionEnvelope(
+        from object: [String: Any],
+        source: SourceInfo,
+        agentEvent: AgentEvent?
+    ) -> BridgeEnvelope? {
         guard
             let input = object["tool_input"] as? [String: Any],
             let rawQuestions = input["questions"] as? [[String: Any]]
@@ -212,7 +237,8 @@ public struct ClaudeCodeAdapter: ToolAdapter {
         }
         return makeEnvelope(
             source: source,
-            content: .question(QuestionContent(title: Self.askQuestionTitle, questions: items))
+            content: .question(QuestionContent(title: Self.askQuestionTitle, questions: items)),
+            agentEvent: agentEvent
         )
     }
 
@@ -354,20 +380,139 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     private func makeSource(from object: [String: Any]) -> SourceInfo {
         let cwd = (object["cwd"] as? String).flatMap(nonEmpty)
         let projectName = cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
-        let sessionShortId = (object["session_id"] as? String)
-            .flatMap(nonEmpty)
+        let sessionID = (object["session_id"] as? String).flatMap(nonEmpty)
+        let sessionShortId = sessionID
             .map { String($0.prefix(6)) }
 
         return SourceInfo(
             tool: .claudeCode,
             projectName: projectName,
+            sessionID: sessionID,
             sessionShortId: sessionShortId,
             cwd: cwd
         )
     }
 
-    private func makeEnvelope(source: SourceInfo, content: BubbleContent) -> BridgeEnvelope {
-        BridgeEnvelope(requestId: UUID(), source: source, content: content)
+    private func makeEnvelope(
+        source: SourceInfo,
+        content: BubbleContent,
+        agentEvent: AgentEvent? = nil
+    ) -> BridgeEnvelope {
+        BridgeEnvelope(requestId: UUID(), source: source, content: content, agentEvent: agentEvent)
+    }
+
+    private func makeAgentEvent(from object: [String: Any], source: SourceInfo) -> AgentEvent? {
+        guard let eventName = object["hook_event_name"] as? String else {
+            return nil
+        }
+        guard let sessionID = (object["session_id"] as? String).flatMap(nonEmpty) else {
+            return nil
+        }
+        let timestamp = Date()
+
+        switch eventName {
+        case "SessionStart":
+            return .sessionStarted(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                title: source.projectName ?? "Claude Code",
+                tool: .claudeCode,
+                summary: lifecycleSummary(for: eventName, object: object),
+                jumpTarget: source.jumpTarget
+            )
+        case "UserPromptSubmit", "PostToolUse", "SubagentStart", "SubagentStop", "PreCompact", "Notification":
+            return .activityUpdated(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                summary: lifecycleSummary(for: eventName, object: object)
+            )
+        case "PreToolUse":
+            let summary = lifecycleSummary(for: eventName, object: object)
+            if (object["tool_name"] as? String).flatMap(nonEmpty) == "AskUserQuestion" {
+                return .questionAsked(sessionID: sessionID, timestamp: timestamp, summary: summary)
+            }
+            return .permissionRequested(sessionID: sessionID, timestamp: timestamp, summary: summary)
+        case "Stop":
+            return .sessionCompleted(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                summary: resolveCompletionSummary(from: object),
+                isError: (object["is_error"] as? Bool) ?? false,
+                isSessionEnd: false
+            )
+        case "StopFailure":
+            return .sessionCompleted(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                summary: lifecycleSummary(for: eventName, object: object),
+                isError: true,
+                isSessionEnd: false
+            )
+        case "SessionEnd":
+            return .sessionCompleted(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                summary: lifecycleSummary(for: eventName, object: object),
+                isError: false,
+                isSessionEnd: true
+            )
+        case "PermissionDenied":
+            return .actionableStateResolved(
+                sessionID: sessionID,
+                timestamp: timestamp,
+                summary: lifecycleSummary(for: eventName, object: object)
+            )
+        default:
+            return nil
+        }
+    }
+
+    private func lifecycleContent(for eventName: String, object: [String: Any]) -> BubbleContent {
+        if eventName == "StopFailure" {
+            return .completion(CompletionContent(markdownSummary: lifecycleSummary(for: eventName, object: object), isError: true))
+        }
+        if eventName == "SessionEnd" {
+            return .completion(CompletionContent(markdownSummary: lifecycleSummary(for: eventName, object: object), isError: false))
+        }
+        return .status(StatusContent(text: singleLine(lifecycleSummary(for: eventName, object: object))))
+    }
+
+    private func lifecycleSummary(for eventName: String, object: [String: Any]) -> String {
+        if let message = (object["message"] as? String).flatMap(nonEmpty) {
+            return message
+        }
+        if let summary = (object["summary"] as? String).flatMap(nonEmpty) {
+            return summary
+        }
+        if let prompt = (object["prompt"] as? String).flatMap(nonEmpty) {
+            return "User prompt: \(prompt)"
+        }
+        if let toolName = (object["tool_name"] as? String).flatMap(nonEmpty) {
+            return "Claude Code \(eventName): \(toolName)"
+        }
+
+        switch eventName {
+        case "SessionStart":
+            return "Claude Code session started"
+        case "UserPromptSubmit":
+            return "Claude Code received a prompt"
+        case "PostToolUse":
+            return "Claude Code finished a tool"
+        case "SubagentStart":
+            return "Claude Code subagent started"
+        case "SubagentStop":
+            return "Claude Code subagent stopped"
+        case "PreCompact":
+            return "Claude Code is compacting context"
+        case "PermissionDenied":
+            return "Claude Code permission was denied"
+        case "SessionEnd":
+            return "Claude Code session ended"
+        case "StopFailure":
+            return "Claude Code stopped with an error"
+        default:
+            return "Claude Code activity"
+        }
     }
 
     private func singleLine(_ text: String) -> String {

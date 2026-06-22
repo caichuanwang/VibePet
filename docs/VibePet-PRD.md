@@ -103,6 +103,12 @@ VibePet 是一个 macOS 原生**桌面宠物 + 深度 agent 集成**应用。一
 
 > 各版本更细的非目标见对应 spec 的"非目标"小节。
 
+### 2.4 发布与商业模式（Distribution & Monetization）
+
+- **分发渠道**：计划上架 **Mac App Store**。
+- **付费模式**：**买断制（一次性付费）**，无订阅、无内购账号体系——与 §2.3"纯本地、无服务器、无登录"一致（买断不引入云端账号或服务器依赖）。
+- **已知约束/风险**：App Store 强制 **App Sandbox**，与当前架构存在真实张力——hook 二进制写 `~/.codex`/`~/.claude`、Unix domain socket、osascript 终端跳回均属沙盒外系统副作用。上架前需评估：沙盒豁免（temporary-exception entitlements）/ 迁移到 App Group 容器路径，或退而采用 **Developer ID 公证直分发**作为兜底。该评估属独立工作项，**不改变 §5 现有 fail-open / 稳定路径 / 本地优先的工程约束**。
+
 ---
 
 ## 3. 组织架构（Architecture）
@@ -206,22 +212,22 @@ VibePet/
 ### 4.1 `VibePetCore/`（纯逻辑，可单测）
 
 **Bridge/** — 桥接协议与传输 🟢
-- `BridgeEnvelope.swift`：归一化信封 + `BubbleContent` 四态枚举。
+- `BridgeEnvelope.swift`：归一化信封 + `BubbleContent` 四态枚举；`SourceInfo` 已含稳定 `sessionID` 与可选 `jumpTarget`。🟢🟡
 - `BridgeResponse.swift`：回传响应（`approval`/`question`/`defer`）。
 - `BridgeServer.swift` / `BridgeClient.swift`：socket 服务端/客户端。
 - `BridgeSocketIO.swift` / `SocketPath.swift`：NDJSON 收发与套接字路径。
-- `HookRuntime.swift` / `HookInvocation.swift`：hook 运行时（`runDecision`/`runNotification`）、调用解析。🟡 0.2 拓宽事件覆盖。
+- `HookRuntime.swift` / `HookInvocation.swift`：hook 运行时（`runDecision`/`runNotification`）、调用解析；已支持 lifecycle `AgentEvent` 随 envelope 送达。🟢🟡
 - `HookSkipConfiguration.swift`：hook 跳过配置（post-M6 硬化，见 memory）。
 
-**Adapters/** — 工具适配层 🟡
-- `ToolAdapter.swift`：适配协议（`parseEvent` / `encodeResponse`）。
-- `ClaudeCodeAdapter.swift` / `CodexAdapter.swift`：两工具适配。🟡 0.2 增全 hook → `AgentEvent` 映射、`SourceInfo.sessionID` 填充、`JumpTarget` 捕获。
+**Adapters/** — 工具适配层 🟢🟡
+- `ToolAdapter.swift`：适配协议（`parseEvent` / `parseAgentEvent` / `encodeResponse`）。
+- `ClaudeCodeAdapter.swift` / `CodexAdapter.swift`：两工具适配。🟢🟡 已增 lifecycle hook → `AgentEvent` 映射与 `SourceInfo.sessionID` 填充；`JumpTarget` 环境解析仍待子项目 3。
 - `RiskClassifier.swift`：审批风险分级启发式（危险命令模式 → high）。
 
 **Install/** — 安装器逻辑 🟢🟡
 - `HookInstaller.swift`：install/uninstall/status 三件套编排。
 - `InstallManifest.swift`：manifest 驱动幂等与精确卸载。
-- `ClaudeCodeConfigWriter.swift` / `CodexConfigWriter.swift`：写 `settings.json` / `config.toml`。🟡 0.2 注册新增 hook 条目。
+- `ClaudeCodeConfigWriter.swift` / `CodexConfigWriter.swift`：写 `settings.json` / `config.toml`。🟢 已注册 0.2 lifecycle hook 条目并保留幂等/精确卸载。
 - `BinaryInstaller.swift` / `InstallPaths.swift` / `HooksBinaryLocator.swift`：二进制拷贝到稳定路径、路径解析。
 - `HookHealthCheck.swift`：安装健康检查（post-M6 硬化）。
 - `ToolConfigWriter.swift`：写入器协议。
@@ -242,16 +248,19 @@ VibePet/
 **Pet/** — 宠物状态机 🟢
 - `PetStateMachine.swift`：`idle/greet/notify/decide` 状态机（UI 无关部分）。
 
-**✨ 0.2 将新增（尚未落地）**：`Session/`（`SessionState`/`AgentSession`/`AgentEvent`/`SessionPhase`）、`JumpTarget` 数据模型 + hook 时终端 locator（osascript 经注入闭包）、Codex `pet.json` 解析 + spritesheet 网格切片逻辑。
+**Session/** — 会话模型 🟢
+- `SessionState.swift` / `SessionModels.swift` / `AgentEvent.swift`：持久多会话 reducer、`AgentSession`、`SessionPhase`、`JumpTarget` 数据模型、派生聚合与探活 reaping。
+
+**✨ 0.2 将新增（尚未落地）**：hook 时终端 locator（osascript 经注入闭包）、Codex `pet.json` 解析 + spritesheet 网格切片逻辑。
 
 ### 4.2 `VibePetApp/`（SwiftUI/AppKit 宿主）
 
 - `main.swift`：App 入口。
-- **Bridge/**`BridgeServerHost.swift`：socket 服务宿主，`decideStream`/`notifyStream`。🟡 0.2 接 `SessionState`。
-- **Pet/**`PetController.swift`（状态协调）、`PetView.swift`（渲染）、`PetAnimations.swift`（程序化动画 🔴 0.2 由 `SpriteSheetAnimator` ✨ 替换）、`PetWindowSurface.swift`。
+- **Bridge/**`BridgeServerHost.swift`：socket 服务宿主，`decideStream`/`notifyStream`。🟢🟡 已接 App-owned `SessionState`、决策转移与探活 sweep。
+- **Pet/**`PetController.swift`（状态协调，已由 `SessionState` 派生活动）、`PetView.swift`（渲染）、`PetAnimations.swift`（程序化动画 🔴 0.2 由 `SpriteSheetAnimator` ✨ 替换）、`PetWindowSurface.swift`。
 - **Bubble/**`SpeechBubble.swift`、`ApprovalCard.swift`、`QuestionCard.swift`、`BubbleStackView.swift`、`BubbleQueue.swift`（堆叠队列）、`BubbleTheme.swift`。🟡 0.2 气泡加双击跳回。
 - **Window/**`PetWindow.swift`、`PetWindowController.swift`、`PetDragController.swift`：透明无边框浮动窗、拖动吸附。
-- **MenuBar/**`StatusItemController.swift`：菜单栏。🟡 0.2 展示多会话聚合数。
+- **MenuBar/**`StatusItemController.swift`：菜单栏。🟢🟡 已展示多会话活跃/待处理聚合数。
 - **Settings/**`SettingsView.swift`、`HookInstallSection.swift`、`HookInstallCoordinator.swift`：设置页与安装编排。
 - **Onboarding/**`OnboardingFlow.swift`：首启引导。🟡 0.2 第②步"生成宠物"→"挑一个宠物"。
 - **Import/**`PetImportPanel.swift`、`PetImportViewModel.swift`：照片导入面板 🔴（0.2 删除，导入改为宠物文件夹拖拽）。

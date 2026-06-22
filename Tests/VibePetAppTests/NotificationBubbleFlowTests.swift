@@ -49,6 +49,19 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(surface.dismissCount, 1)
     }
 
+    func testSessionSyncDoesNotDismissVisibleNotificationBubble() {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface)
+        let state = SessionState()
+
+        controller.handle(completionEnvelope())
+        controller.sync(with: state)
+
+        XCTAssertEqual(controller.state, .notify)
+        XCTAssertEqual(surface.dismissCount, 0, "session sync must not dismiss a controller-owned bubble")
+        XCTAssertEqual(surface.presentedBubbles.count, 1)
+    }
+
     func testHiddenPetDropsNotificationWithoutBubble() {
         let surface = FakePetSurface()
         surface.petFrame = nil // pet hidden
@@ -82,6 +95,26 @@ final class NotificationBubbleFlowTests: XCTestCase {
         guard case .completion = surface.presentedBubbles.first?.content else {
             return XCTFail("Expected a completion bubble")
         }
+    }
+
+    func testSessionStartUpdatesStateAndGreetsWithoutBubble() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        let client = BridgeClient(socketPath: socketPath)
+        try await client.sendOneWay(sessionStartEnvelope())
+
+        try await waitUntil { host.sessionStateSnapshot.sessionsByID["session-full"] != nil }
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["session-full"]?.phase, .running)
+        XCTAssertEqual(surface.lastActivity, .greeting)
+        XCTAssertTrue(surface.presentedBubbles.isEmpty, "SessionStart is state, not a user-facing bubble")
     }
 
     // MARK: - Approval (decide) — M4-5 / M4-6
@@ -191,6 +224,21 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(surface.notificationBadge, 0, "badge clears once the queue drains")
     }
 
+    func testGreetingDoesNotClobberDecision() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 10)
+
+        let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+
+        XCTAssertFalse(controller.greet(), "greet should not preempt decide")
+        XCTAssertEqual(controller.state, .decide)
+        XCTAssertEqual(surface.lastActivity, .deciding)
+
+        surface.fireDecision(.approval(.allowOnce))
+        _ = await task.value
+    }
+
     func testApprovalRoundTripPairsRequestIdViaHost() async throws {
         let root = try TemporaryDirectory()
         let socketPath = SocketPath(applicationSupportRoot: root.url)
@@ -207,11 +255,94 @@ final class NotificationBubbleFlowTests: XCTestCase {
         async let responseEnv = client.send(envelope)
 
         try await waitUntil { surface.presentedApprovals.count == 1 }
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID[envelope.source.sessionID]?.phase, .waitingForApproval)
         surface.fireDecision(.approval(.deny(reason: "blocked")))
 
         let result = try await responseEnv
         XCTAssertEqual(result.requestId, envelope.requestId, "response must pair the request by id")
         XCTAssertEqual(result.response, .approval(.deny(reason: "blocked")))
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID[envelope.source.sessionID]?.phase, .completed)
+    }
+
+    func testApprovalTimeoutRepliesDeferAndReturnsSessionToRunning() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, decisionTimeout: 0.05)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        let envelope = approvalEnvelope()
+        let result = try await BridgeClient(socketPath: socketPath, readTimeout: 2).send(envelope)
+
+        XCTAssertEqual(result.requestId, envelope.requestId)
+        XCTAssertEqual(result.response, .defer)
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID[envelope.source.sessionID]?.phase, .running)
+    }
+
+    func testLivenessSweepReapsSessionAfterTwoMisses() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(
+            petController: controller,
+            socketPath: socketPath,
+            liveSessionProvider: { _ in [] },
+            livenessInterval: 60
+        )
+
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        try await BridgeClient(socketPath: socketPath).sendOneWay(sessionStartEnvelope())
+        try await waitUntil { host.sessionStateSnapshot.sessionsByID["session-full"] != nil }
+
+        await host.runLivenessSweepOnce()
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["session-full"]?.processNotSeenCount, 1)
+
+        await host.runLivenessSweepOnce()
+        let session = host.sessionStateSnapshot.sessionsByID["session-full"]
+        XCTAssertNil(session, "reaped sessions should be evicted after the sweep")
+        XCTAssertFalse(host.sessionStateSnapshot.visibleSessions.contains { $0.id == "session-full" })
+    }
+
+    func testProcessLivenessMatchesTTYInsteadOfToolWideCommandSubstring() {
+        var state = SessionState()
+        state.apply(.sessionStarted(
+            sessionID: "codex-a",
+            timestamp: Date(),
+            title: "Codex A",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: JumpTarget(terminalApp: "Terminal", terminalTTY: "/dev/ttys001")
+        ))
+        state.apply(.sessionStarted(
+            sessionID: "codex-b",
+            timestamp: Date(),
+            title: "Codex B",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: JumpTarget(terminalApp: "Terminal", terminalTTY: "/dev/ttys002")
+        ))
+
+        let alive = AgentProcessLiveness.liveSessionIDs(in: state, rows: [
+            AgentProcessLiveness.ProcessRow(tty: "ttys001", command: "/opt/homebrew/bin/codex"),
+            AgentProcessLiveness.ProcessRow(tty: "ttys002", command: "/Applications/VibePet.app/Contents/MacOS/VibePetHooks --tool codex"),
+        ])
+
+        XCTAssertEqual(alive, ["codex-a"])
+    }
+
+    func testProcessLivenessKeepsUnidentifiedSessionsAlive() {
+        var state = SessionState()
+        state.apply(sessionStartEnvelope().agentEvent!)
+
+        XCTAssertEqual(AgentProcessLiveness.liveSessionIDs(in: state, rows: []), ["session-full"])
     }
 
     // MARK: - Question (decide) — M5
@@ -350,11 +481,105 @@ final class NotificationBubbleFlowTests: XCTestCase {
         try await waitUntil { store.read().tools[ToolKind.codex.rawValue]?.activationState == .trustedActive }
     }
 
+    func testCodexNotifyCompletionCanRekeyByThreadID() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        let client = BridgeClient(socketPath: socketPath)
+        try await client.sendOneWay(codexSessionStartEnvelope())
+        try await waitUntil { host.sessionStateSnapshot.sessionsByID["codex-session-full"] != nil }
+
+        try await client.sendOneWay(codexThreadCompletionEnvelope())
+        try await waitUntil {
+            host.sessionStateSnapshot.sessionsByID["codex-session-full"]?.phase == .completed
+        }
+
+        XCTAssertNil(host.sessionStateSnapshot.sessionsByID["codex-thread-1"])
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-session-full"]?.summary, "Done by notify")
+    }
+
+    func testCodexNotifyCompletionCanRekeyByUniqueWorkingDirectory() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        let client = BridgeClient(socketPath: socketPath)
+        try await client.sendOneWay(codexSessionStartEnvelope(threadID: nil))
+        try await waitUntil { host.sessionStateSnapshot.sessionsByID["codex-session-full"] != nil }
+
+        try await client.sendOneWay(codexThreadCompletionEnvelope(threadID: "notify-thread-only"))
+        try await waitUntil {
+            host.sessionStateSnapshot.sessionsByID["codex-session-full"]?.phase == .completed
+        }
+
+        XCTAssertNil(host.sessionStateSnapshot.sessionsByID["notify-thread-only"])
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-session-full"]?.summary, "Done by notify")
+    }
+
     private func codexCompletionEnvelope() -> BridgeEnvelope {
         BridgeEnvelope(
             requestId: UUID(),
             source: SourceInfo(tool: .codex, projectName: "VibePet", sessionShortId: "9f8e7d", cwd: "/tmp/VibePet"),
             content: .completion(CompletionContent(markdownSummary: "Done", isError: false))
+        )
+    }
+
+    private func codexSessionStartEnvelope(threadID: String? = "codex-thread-1") -> BridgeEnvelope {
+        let jumpTarget = JumpTarget(terminalApp: "Codex", workingDirectory: "/tmp/VibePet", codexThreadID: threadID)
+        let event = AgentEvent.sessionStarted(
+            sessionID: "codex-session-full",
+            timestamp: Date(),
+            title: "VibePet",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: jumpTarget
+        )
+        return BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(
+                tool: .codex,
+                projectName: "VibePet",
+                sessionID: "codex-session-full",
+                sessionShortId: "codex-",
+                cwd: "/tmp/VibePet",
+                jumpTarget: jumpTarget
+            ),
+            content: .status(StatusContent(text: "Started")),
+            agentEvent: event
+        )
+    }
+
+    private func codexThreadCompletionEnvelope(threadID: String = "codex-thread-1") -> BridgeEnvelope {
+        let jumpTarget = JumpTarget(terminalApp: "Codex", workingDirectory: "/tmp/VibePet", codexThreadID: threadID)
+        return BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(
+                tool: .codex,
+                projectName: "VibePet",
+                sessionID: threadID,
+                sessionShortId: "codex-",
+                cwd: "/tmp/VibePet",
+                jumpTarget: jumpTarget
+            ),
+            content: .completion(CompletionContent(markdownSummary: "Done by notify", isError: false)),
+            agentEvent: .sessionCompleted(
+                sessionID: threadID,
+                timestamp: Date(),
+                summary: "Done by notify",
+                isError: false,
+                isSessionEnd: false
+            )
         )
     }
 
@@ -365,6 +590,29 @@ final class NotificationBubbleFlowTests: XCTestCase {
             requestId: UUID(),
             source: SourceInfo(tool: .claudeCode, projectName: "VibePet", sessionShortId: "a1b2c3", cwd: "/tmp/VibePet"),
             content: .completion(CompletionContent(markdownSummary: "新增 3 个测试，全部通过", isError: false))
+        )
+    }
+
+    private func sessionStartEnvelope() -> BridgeEnvelope {
+        let event = AgentEvent.sessionStarted(
+            sessionID: "session-full",
+            timestamp: Date(),
+            title: "VibePet",
+            tool: .claudeCode,
+            summary: "Started",
+            jumpTarget: nil
+        )
+        return BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(
+                tool: .claudeCode,
+                projectName: "VibePet",
+                sessionID: "session-full",
+                sessionShortId: "sessio",
+                cwd: "/tmp/VibePet"
+            ),
+            content: .status(StatusContent(text: "Started")),
+            agentEvent: event
         )
     }
 
