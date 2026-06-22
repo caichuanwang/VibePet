@@ -30,7 +30,10 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
     public func install(arguments: [String]) throws {
         var root = readRoot()
         var hooks = (root["hooks"] as? [String: Any]) ?? [:]
-        let command = ([hookBinaryPath] + arguments).joined(separator: " ")
+        // Quote the binary path: Claude Code runs the command via `/bin/sh -c`, so a
+        // path containing spaces (e.g. `.../Application Support/...`) would split and
+        // fail to launch. Mirrors CodexConfigWriter's shell-quoting.
+        let command = ([Self.shellQuote(hookBinaryPath)] + arguments).joined(separator: " ")
 
         for key in managedHookKeys {
             var groups = (hooks[key] as? [[String: Any]]) ?? []
@@ -78,6 +81,12 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
     private func isVibePetGroup(_ group: [String: Any]) -> Bool {
         let innerHooks = (group["hooks"] as? [[String: Any]]) ?? []
         return innerHooks.contains { ($0["command"] as? String)?.contains(hookBinaryPath) == true }
+    }
+
+    /// Wraps a path in single quotes so `/bin/sh -c` treats it as one argument even
+    /// when it contains spaces.
+    private static func shellQuote(_ string: String) -> String {
+        "'" + string.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func readRoot() -> [String: Any] {

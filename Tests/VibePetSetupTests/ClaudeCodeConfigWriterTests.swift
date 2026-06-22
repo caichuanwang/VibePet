@@ -20,6 +20,19 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         }
     }
 
+    func testQuotesBinaryPathSoSpacesSurviveShellExecution() throws {
+        // Claude Code runs each command via `/bin/sh -c`; an unquoted path containing
+        // spaces (`Application Support`) would split and fail with "No such file".
+        let url = try emptyConfig()
+        let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
+
+        try writer.install(arguments: [])
+
+        let hooks = try hooksObject(url)
+        let command = try XCTUnwrap(commands(in: hooks, key: "Stop").first { $0.contains(binaryPath) })
+        XCTAssertTrue(command.contains("'\(binaryPath)'"), "binary path must be single-quoted; got: \(command)")
+    }
+
     func testPreservesUserHooksAndSettings() throws {
         let url = try fixtureConfig()
         let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
