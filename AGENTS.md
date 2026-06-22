@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-VibePet is a Swift Package targeting macOS 14 with Swift tools 6.0. Core reusable code lives in `VibePetCore/`, organized by concern: `Bridge/`, `Generation/`, `Persistence/`, and `Adapters/`. Executable targets are split into `VibePetApp/`, `VibePetHooks/`, `VibePetSetup/`, and `Tools/CutoutBenchmark/Sources/CutoutBenchmark/`. Tests live in `Tests/VibePetCoreTests/`; shared test helpers are under `Tests/VibePetCoreTests/Support/`, and image fixtures are under `Tests/Fixtures/photos/`. Product and design notes are in `docs/`; OpenSpec requirements and archived changes are in `openspec/`.
+VibePet is a Swift Package targeting macOS 14 with Swift tools 6.0. Core reusable, UI-independent code lives in `VibePetCore/`, organized by concern: `Bridge/`, `Adapters/`, `Install/`, `Persistence/`, `Geometry/`, and `Pet/`. Executable targets are split into `VibePetApp/`, `VibePetHooks/`, and `VibePetSetup/`. Tests live under `Tests/` (`VibePetCoreTests/`, `VibePetAppTests/`, `VibePetSetupTests/`, `E2E/`); shared core helpers are under `Tests/VibePetCoreTests/Support/`. Long-lived product docs are in `docs/` (`VibePet-PRD.md`), current-version design in `docs/superpowers/specs/`, archived docs in `docs/archive/`; OpenSpec requirements and archived changes are in `openspec/`.
 
 ## Build, Test, and Development Commands
 
@@ -11,7 +11,6 @@ VibePet is a Swift Package targeting macOS 14 with Swift tools 6.0. Core reusabl
 - `swift run VibePetApp` launches the app executable.
 - `swift run VibePetSetup` runs local setup behavior.
 - `swift run VibePetHooks` runs the hook bridge helper.
-- `swift run CutoutBenchmark` runs the cutout benchmark tool.
 
 Use `swift package describe --type json` when you need to confirm target membership or products.
 
@@ -21,7 +20,7 @@ Use idiomatic Swift with 4-space indentation, `UpperCamelCase` for types, and `l
 
 ## Testing Guidelines
 
-Tests use XCTest and should be added under `Tests/VibePetCoreTests/` with filenames ending in `Tests.swift`. Follow the existing `test...` method naming pattern, for example `testApprovalContentRoundTrips`. Prefer deterministic fixtures from `Tests/Fixtures/photos/` over ad hoc local files. Run `swift test` before submitting changes that affect core logic, bridge serialization, generation, persistence, or adapters.
+Tests use XCTest and should be added under the matching `Tests/` target (`VibePetCoreTests/`, `VibePetAppTests/`, `VibePetSetupTests/`, or `E2E/`) with filenames ending in `Tests.swift`. Follow the existing `test...` method naming pattern, for example `testApprovalContentRoundTrips`. Prefer deterministic fixtures (e.g. `Tests/Fixtures/claude/`) over ad hoc local files. Run `swift test` before submitting changes that affect core logic, bridge serialization, adapters, the installer, persistence, or fail-open paths. Verify installer/config-writer logic by unit tests only — never real install smoke tests, since writes hit the real `~/.codex` / `~/.claude` even with `$HOME` overridden. An intermittent SIGPIPE (signal 13) during a full `swift test` run is not a regression; re-run or use `--filter`.
 
 ## Commit & Pull Request Guidelines
 
@@ -33,11 +32,11 @@ Do not commit generated build output, private local paths, credentials, or perso
 
 ## Project-Specific Guardrails
 
-- Keep `VibePetCore/` UI-independent. Do not import `AppKit` or `SwiftUI` there; UI belongs in `VibePetApp/`.
-- Preserve fail-open behavior for hooks and bridge code. If the app is not running, the socket fails, input is malformed, or a timeout occurs, Claude Code and Codex must fall back to their native flow instead of hanging.
-- Keep photo generation local-first. Do not add network generation, telemetry, or photo upload paths without an explicit product change and user authorization design.
-- When changing `LocalCutoutGenerator`, image post-processing, or `PetAssetStore`, run `swift test` and `swift run CutoutBenchmark`.
-- Hook installation must point tool configuration at a stable copy such as `~/Library/Application Support/VibePet/bin/VibePetHooks`, not a path inside the `.app` bundle.
+- Keep `VibePetCore/` UI-independent. Do not import `AppKit` or `SwiftUI` there; UI belongs in `VibePetApp/`. System side effects needed by Core logic (osascript, etc.) must be exposed through injectable closures so unit tests don't touch the real system.
+- Preserve fail-open behavior for hooks and bridge code. If the app is not running, the socket fails, input is malformed, or a timeout occurs, Claude Code and Codex must fall back to their native flow instead of hanging. This is a red line that must not regress in any version.
+- Keep the project local-first. Do not add network generation, telemetry, or upload paths without an explicit product change and user authorization design.
+- When changing `PetAssetStore`, bridge serialization, adapters, or the installer, run `swift test`.
+- Hook installation must point tool configuration at a stable copy such as `~/Library/Application Support/VibePet/bin/VibePetHooks`, not a path inside the `.app` bundle. That stable path contains a space and runs via `/bin/sh -c`, so config writers must single-quote the hook command path.
 
 # AGENTS.md
 

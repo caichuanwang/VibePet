@@ -1,20 +1,23 @@
 # VibePet
 
-VibePet is a native macOS desktop pet for vibe coding workflows. The MVP goal is to turn a user-provided pet or character photo into a lightweight 2D desktop companion, then use that companion as a visible approval surface for AI coding tools such as Claude Code and Codex.
+VibePet is a native macOS desktop pet for vibe coding workflows. An animated 2D pet lives on your desktop and acts as a visible approval surface for AI coding tools such as Claude Code and Codex: when an agent needs you to allow, deny, or answer something, VibePet surfaces it in a desktop bubble so you can act without hunting through terminal windows.
 
-When an agent needs permission, VibePet will surface the request in a desktop bubble so the user can allow, deny, or defer without hunting through terminal windows. The project is designed to be local-first: photo cutout, bridge transport, and hook handling run on the user's machine.
+The pet also reflects ongoing session state (running a tool / waiting on you / done / failed), aggregates multiple sessions across terminals and tools, and lets you double-click any bubble to jump back to the terminal it came from. Pets use the standard Codex pet format (spritesheet) sourced in place from `~/.codex/pets/`, so VibePet hosts the wider Codex pet ecosystem.
+
+VibePet is **local-first**: bridge transport, hook handling, pet sourcing, and rendering all run on the user's machine. No account, cloud sync, telemetry, or remote generation is required.
+
+See the [PRD](docs/VibePet-PRD.md) for product direction, architecture, and the code map.
 
 ## Current Status
 
-The repository currently contains the Swift Package scaffold, core bridge models, Unix socket bridge infrastructure, configuration persistence, local cutout generation, asset storage, and unit tests for core behavior.
+The repository contains the Swift Package and the core implementation — normalized bridge models, Unix socket transport, the Claude Code / Codex tool adapters, the manifest-driven hook installer, configuration and asset persistence, and the floating pet window with bubbles — plus unit and end-to-end tests.
 
-The app target is still a minimal runnable macOS window. The full floating pet UI, speech bubbles, hook installer behavior, and end-to-end Claude Code/Codex integrations are tracked in the project docs and OpenSpec files.
+Work in progress is designed in [`docs/superpowers/specs/`](docs/superpowers/specs/): a persistent multi-session `SessionState` reducer with full hook-lifecycle coverage, the Codex spritesheet pet host, and terminal jump-back.
 
 ## Requirements
 
 - macOS 14 or newer
 - Xcode toolchain with Swift 6 support
-- Apple Silicon recommended for Vision-based local cutout performance
 
 ## Quick Start
 
@@ -30,7 +33,7 @@ Run the test suite:
 swift test
 ```
 
-Launch the current app shell:
+Launch the app:
 
 ```sh
 swift run VibePetApp
@@ -39,70 +42,73 @@ swift run VibePetApp
 Run the helper CLIs:
 
 ```sh
-swift run VibePetHooks
-swift run VibePetSetup
-swift run CutoutBenchmark
+swift run VibePetHooks   # hook bridge helper (invoked by AI tools)
+swift run VibePetSetup   # install / uninstall hook configuration
 ```
 
 ## Package Layout
 
 ```text
-VibePetCore/        Shared models, bridge, generation, persistence, adapters
-VibePetApp/         macOS app executable
-VibePetHooks/       CLI invoked by AI tool hooks
-VibePetSetup/       CLI intended to install/uninstall hook configuration
-Tools/              Developer and benchmark tools
-Tests/              XCTest suite and image fixtures
-docs/               Product, technical, and MVP planning documents
-openspec/           Executable specifications and archived changes
+VibePetCore/    Shared, UI-independent logic:
+                  Bridge/      normalized envelope + Unix socket transport + hook runtime
+                  Adapters/    Claude Code / Codex tool adapters + risk classifier
+                  Install/     manifest-driven hook installer (idempotent, precise uninstall)
+                  Persistence/ config + pet asset storage
+                  Geometry/    bubble anchoring, screen snap, sprite hit-mask
+                  Pet/         pet state machine
+VibePetApp/     macOS app: floating pet window, bubbles, menu bar, settings, bridge host
+VibePetHooks/   CLI invoked by AI tool hooks
+VibePetSetup/   CLI that installs/uninstalls hook configuration
+Tests/          XCTest suite (core, app, setup, E2E) and fixtures
+docs/           PRD (long-lived), current-version specs, and archived docs
+openspec/       Executable specifications and archived changes
 ```
 
-`VibePetCore` is intentionally UI-independent so it can be shared by the app, hook CLI, setup CLI, tests, and benchmark tooling.
+`VibePetCore` is intentionally UI-independent so it can be shared by the app, hook CLI, setup CLI, and tests. It must not import AppKit or SwiftUI.
 
 ## Architecture Overview
 
-The intended MVP flow is:
+The hook ↔ app bridge uses a Unix domain socket (newline-delimited JSON) at `~/Library/Application Support/VibePet/bridge.sock`, with two channels:
 
-1. `VibePetHooks` receives a tool event from Claude Code or Codex.
+1. `VibePetHooks` receives a tool event from Claude Code or Codex on stdin.
 2. A `ToolAdapter` normalizes the tool-specific payload into a `BridgeEnvelope`.
-3. `BridgeClient` sends newline-delimited JSON over a Unix domain socket.
-4. `VibePetApp` receives the event through `BridgeServer` and renders the appropriate pet bubble.
-5. For approval or question events, the app returns a `BridgeResponseEnvelope`; if anything fails, hooks should fail open rather than blocking the developer.
+3. `BridgeClient` sends it over the socket to `VibePetApp`'s `BridgeServer`.
+4. The app renders the appropriate pet bubble:
+   - **Decision channel (blocking):** approval / question events block the hook while the user acts in the bubble; the response is returned over the same connection and encoded back into the tool's expected stdout.
+   - **Notification channel (non-blocking):** completion / status and lifecycle events fire-and-forget.
+5. If anything fails — app not running, socket error, malformed input, or timeout — hooks **fail open** (`defer`) so the developer is never blocked.
 
-Local photo-to-pet generation is handled through `PetGenerator`, with `LocalCutoutGenerator` providing the MVP implementation using Apple's Vision foreground mask APIs.
+The app holds a persistent `SessionState` reducer as the single source of truth; both channels feed it, and the pet's animation plus the menu-bar counts are derived from aggregated multi-session state. See the [PRD](docs/VibePet-PRD.md) §3 and the specs for details.
 
 ## Documentation Map
 
-- [Product requirements](docs/VibePet-PRD.md)
-- [Technical implementation plan](docs/VibePet-技术实现方案.md)
-- [MVP task breakdown](docs/VibePet-MVP-任务拆解.md)
-- [Contributor guide](AGENTS.md)
+- [PRD (long-lived main document)](docs/VibePet-PRD.md) — product direction, architecture, code map, cross-cutting technical approach
+- [Current-version specs](docs/superpowers/specs/) — session model + full hooks, Codex pet host, terminal jump-back
+- [Archived docs](docs/archive/) — historical PRD, technical plan, task breakdown, code archive
+- [Contributor guide](AGENTS.md) — repository conventions, commands, commit guidance
 - [OpenSpec project specs](openspec/specs/)
 
-Read the PRD for product intent, the technical plan for architecture and tradeoffs, and the MVP task breakdown before starting a new implementation slice.
+Read the PRD for product intent and architecture; read the relevant spec in `docs/superpowers/specs/` before starting a new implementation slice.
 
 ## Testing
 
-The project uses XCTest. Core tests live in `Tests/VibePetCoreTests/`; image fixtures for local cutout behavior live in `Tests/Fixtures/photos/`.
-
-Run all tests with:
+The project uses XCTest. Tests are split across `Tests/VibePetCoreTests/` (core logic), `Tests/VibePetAppTests/` (app layer), `Tests/VibePetSetupTests/` (installer), and `Tests/E2E/` (end-to-end approval/question/notification flows).
 
 ```sh
 swift test
 ```
 
-Run the cutout benchmark tool when changing Vision generation, image post-processing, or asset persistence:
+Notes:
 
-```sh
-swift run CutoutBenchmark
-```
+- Installer/config-writer logic is verified by **unit tests only** — never real install smoke tests, since writes hit the real `~/.codex` / `~/.claude` even with `$HOME` overridden.
+- A full `swift test` run may occasionally die with an intermittent SIGPIPE (signal 13) mid-run despite zero failures; re-run or use `--filter` rather than treating it as a regression.
 
 ## Privacy and Safety
 
-The MVP is local-first. Photos should be processed on-device, and no account, cloud sync, telemetry, or remote generation service is required for the current scope.
+VibePet is local-first: no account, cloud sync, telemetry, or remote generation service is required. Do not add network generation, telemetry, or upload paths without an explicit product change and user authorization design.
 
-Hook and bridge changes must preserve fail-open behavior: if VibePet is not running, cannot connect, times out, or encounters malformed input, AI coding tools should fall back to their native approval flow instead of hanging.
+Hook and bridge changes must preserve **fail-open** behavior: if VibePet is not running, cannot connect, times out, or encounters malformed input, AI coding tools must fall back to their native approval flow instead of hanging.
 
 ## Contributing
 
-Keep changes small and tied to the documented milestones. Prefer adding or updating focused XCTest coverage for bridge encoding, adapter behavior, persistence, generation, and fail-open paths. See [AGENTS.md](AGENTS.md) for repository conventions, commands, and commit guidance.
+Keep changes small and tied to a documented spec. Prefer adding or updating focused XCTest coverage for bridge encoding, adapter behavior, persistence, the installer, and fail-open paths. See [AGENTS.md](AGENTS.md) for repository conventions, commands, and commit guidance.
