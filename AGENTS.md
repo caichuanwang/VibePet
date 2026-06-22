@@ -4,6 +4,8 @@
 
 VibePet is a Swift Package targeting macOS 14 with Swift tools 6.0. Core reusable, UI-independent code lives in `VibePetCore/`, organized by concern: `Bridge/`, `Adapters/`, `Install/`, `Persistence/`, `Geometry/`, and `Pet/`. Executable targets are split into `VibePetApp/`, `VibePetHooks/`, and `VibePetSetup/`. Tests live under `Tests/` (`VibePetCoreTests/`, `VibePetAppTests/`, `VibePetSetupTests/`, `E2E/`); shared core helpers are under `Tests/VibePetCoreTests/Support/`. Long-lived product docs are in `docs/` (`VibePet-PRD.md`), current-version design in `docs/superpowers/specs/`, archived docs in `docs/archive/`; OpenSpec requirements and archived changes are in `openspec/`.
 
+## where to 
+
 ## Build, Test, and Development Commands
 
 - `swift build` builds all library and executable targets.
@@ -37,6 +39,7 @@ Do not commit generated build output, private local paths, credentials, or perso
 - Keep the project local-first. Do not add network generation, telemetry, or upload paths without an explicit product change and user authorization design.
 - When changing `PetAssetStore`, bridge serialization, adapters, or the installer, run `swift test`.
 - Hook installation must point tool configuration at a stable copy such as `~/Library/Application Support/VibePet/bin/VibePetHooks`, not a path inside the `.app` bundle. That stable path contains a space and runs via `/bin/sh -c`, so config writers must single-quote the hook command path.
+- VibePet plans to ship on the **Mac App Store** with **one-time (buyout) pricing** — no subscription, no account/server (consistent with the local-first guardrail). Be aware this conflicts with App Store **sandboxing**: writing `~/.codex`/`~/.claude`, the Unix socket, and osascript terminal jump-back all live outside the sandbox. Distribution may require sandbox-exception entitlements / App Group container paths, or fall back to Developer ID notarized direct distribution. Do not silently break the stable-path / fail-open / local-first constraints to accommodate this; flag the tradeoff instead.
 
 ## Reference Project: open-vibe-island
 
