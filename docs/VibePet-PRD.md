@@ -178,7 +178,7 @@ UI 只认一套规范模型、不感知工具差异；新增工具只需新增 a
 - `ClaudeCodeAdapter`：`PreToolUse → approval`、`AskUserQuestion → question`（经 `updatedInput` 预填回写）、`Stop → completion`、`Notification → status`；0.2 拓宽到全生命周期 hook → `AgentEvent`。
 - `CodexAdapter`：`PermissionRequest → approval`、`notify(agent-turn-complete) → completion`；提问降级为"回终端处理"（纯 hook 限制）。
 
-> 适配层是 VibePet 跨工具扩展性的关键抽象，也是 clean-room 边界的重点保护对象（见 §5.5）。
+> 适配层是 VibePet 跨工具扩展性的关键抽象。
 
 ### 3.5 持久化与运行时目录
 
@@ -345,7 +345,7 @@ VibePet/
 | 不同画廊 Codex 宠物行序/字段差异 | 精灵动画错位 | `pet.json` 声明优先 + canonical 兜底顺序；非法宠物跳过 |
 | 终端 locator 触发 macOS 自动化权限弹窗 | 首次精度/体验 | 全程 fail-open，拒绝即退化为 env+tty，不报错 |
 | 置顶窗口在全屏/多 Space 表现异常 | 宠物被遮挡 | 合适窗口层级与 collectionBehavior；全屏场景验证 |
-| 参考项目 GPL-3.0 误用传染许可证 | 法务 | clean-room 边界（§5.5），不复用源码 |
+| 参考项目 open-vibe-island 架构对齐 | 实现效率 | 可自由查阅其源码作架构与实现参考；按 VibePet 自有模型/命名落地 |
 
 ### 6.2 路线图
 

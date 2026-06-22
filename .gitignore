@@ -66,3 +66,6 @@ fastlane/test_output
 
 # Local Serena workspace state
 .serena/
+
+# Reference clone of open-vibe-island (GPL-3.0) — kept locally for architecture reference, not committed
+open-vibe-island/

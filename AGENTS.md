@@ -38,6 +38,31 @@ Do not commit generated build output, private local paths, credentials, or perso
 - When changing `PetAssetStore`, bridge serialization, adapters, or the installer, run `swift test`.
 - Hook installation must point tool configuration at a stable copy such as `~/Library/Application Support/VibePet/bin/VibePetHooks`, not a path inside the `.app` bundle. That stable path contains a space and runs via `/bin/sh -c`, so config writers must single-quote the hook command path.
 
+## Reference Project: open-vibe-island
+
+A full clone of **open-vibe-island** (Octane0411/open-vibe-island) lives at `open-vibe-island/` in the repo root. VibePet is essentially "open-vibe-island's architecture + a desktop pet", so it is the primary architecture reference. **You may read its source freely** to align bridge/session/installer/terminal-jump design; reimplement in VibePet's own models and naming rather than copying verbatim. Do not build or test it as part of VibePet — it is a self-contained nested package (its own `Package.swift` + `.git`) that the root `swift build`/`swift test` does not include.
+
+**Its shape mirrors VibePet 1:1** — single Swift package, four targets:
+
+| open-vibe-island target | VibePet equivalent | Role |
+|---|---|---|
+| `OpenIslandCore` | `VibePetCore` | Models, Unix-socket bridge transport (NDJSON), hook installers, session reducer |
+| `OpenIslandApp` | `VibePetApp` | SwiftUI/AppKit shell; `AppModel` is the central `@Observable` state owner |
+| `OpenIslandHooks` | `VibePetHooks` | Lightweight hook CLI: stdin payload → socket → app; blocking stdout only on a `PreToolUse` deny |
+| `OpenIslandSetup` | `VibePetSetup` | Installer CLI for tool config (`~/.codex`, `~/.claude`) |
+
+**Core abstractions VibePet's 0.2 session model is drawn from** (`open-vibe-island/Sources/OpenIslandCore/`):
+- `AgentSession.swift` — `SessionPhase` (exactly `running` / `waitingForApproval` / `waitingForAnswer` / `completed`, with `requiresAttention`), `AgentSession`, and `JumpTarget`.
+- `AgentEvent.swift` — the `AgentEvent` enum (`sessionStarted` / `activityUpdated` / `permissionRequested` / `questionAsked` / `sessionCompleted` / `jumpTargetUpdated` / `actionableStateResolved`, plus per-agent metadata cases VibePet does not need).
+- `SessionState.swift` — `SessionState.apply(_:)` pure reducer over `sessionsByID`, with derived counts (`runningCount`, `attentionCount`, `liveSessionCount`, …).
+- `BridgeServer.swift` / `BridgeTransport.swift` — socket server + newline-delimited JSON envelope codec.
+
+**Where to look, by VibePet sub-project:**
+- Sub-project 1 (session model + hooks): the four Core files above, plus `ClaudeHooks.swift` / `CodexHooks.swift` (payload → event) and `*HookInstaller.swift` / `*HookInstallationManager.swift` (config writing). Design notes: `open-vibe-island/docs/architecture.md`, `docs/hooks.md`, `docs/session-state-refactor.md`.
+- Sub-project 3 (terminal jump-back): `Sources/OpenIslandApp/TerminalJumpService.swift`, `TerminalJumpTargetResolver.swift`, `ForegroundTerminalSessionProbe.swift`.
+
+**Scope caveats — do not copy breadth:** open-vibe-island supports ~10 agents and 15+ terminals/IDEs, a notch overlay UI, Sparkle auto-update, Apple Watch relay, and keystroke/AX injection. VibePet stays at the MVP surface (Claude Code + Codex), has no notch UI, and adds the Codex-spritesheet pet instead. Take the architecture and the precise-jump-at-hook-time insight; leave the extra agents, terminals, and UI surface out unless a VibePet spec asks for them.
+
 # AGENTS.md
 
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.

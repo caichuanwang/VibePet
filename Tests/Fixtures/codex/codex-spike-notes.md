@@ -35,13 +35,13 @@
    - 现实现：当 `tool_name ∈ {"AskUserQuestion"}`（镜像 Claude 命名）时降级为 `.approval(requiresTerminalApproval=true)`。这是**占位假设**，待真实 Codex 会话核对后调整 `CodexAdapter.freeformInputTools`。
    - 兜底：任何无法判定的 Codex 事件 → `parseEvent` 返回 `nil`（忽略）或 decline，绝不卡住——fail-open 成立。
 
-## 安装写入方式（M6-5，用户指定"和 open-vibe-island 一样"，clean-room 复刻做法）
+## 安装写入方式（M6-5，用户指定"和 open-vibe-island 一样"，复刻其做法）
 
 - **hooks → `~/.codex/hooks.json`（JSON）**，不写 `config.toml` 的 `[[hooks.*]]` 表。managed group 的 hook 带 `statusMessage:"Managed by VibePet"`，command = `'<binaryPath>' --tool codex`。注册 **PermissionRequest**（审批）+ **Stop**（完成）。
 - **config.toml 仅切 `[features] hooks = true`**（按行编辑，table 安全；规避 root-key 顺序陷阱——这也是放弃 `notify=[...]` 追加方案的原因）。无第三方 TOML 依赖。
 - **完成通知用 `Stop` hook**（`last_assistant_message`），不用 `notify` 程序。`CodexAdapter` 已加 `Stop`→`.completion`；`notify(agent-turn-complete)` 仍解析（robust）但不注册。
 - 识别/卸载靠 `statusMessage` 标记，精确移除、保留用户（含 OpenIsland）其它 hooks；**不动 config.toml 已有的 `[features] hooks` 用户值**（enableFeature 幂等设 true）。
-- 参考：open-vibe-island `Sources/OpenIslandCore/CodexHooks.swift`、`CodexHookInstaller.swift`、`CodexHookInstallationManager.swift`（仅借做法，未复用 GPL 源码）。
+- 参考：open-vibe-island `Sources/OpenIslandCore/CodexHooks.swift`、`CodexHookInstaller.swift`、`CodexHookInstallationManager.swift`（可自由查阅参考）。
 - ⚠️ **本机 `homeDirectoryForCurrentUser` 忽略 `$HOME`**：真实 install 会写真实 `~/.codex`、`~/.claude`。验证只走 `VibePetSetupTests`（注入临时目录）；真实安装是 10.2 手工步骤。
 
 ## 待真实会话验证（留给 M6-2 E2E / M6-5）
