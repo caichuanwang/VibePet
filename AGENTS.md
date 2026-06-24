@@ -32,6 +32,18 @@ Recent history uses short, imperative summaries, sometimes with conventional pre
 
 Do not commit generated build output, private local paths, credentials, or personal fixture data. Keep `.build/` and local tool caches out of reviews. When changing bridge or hook behavior, document any new socket, file-system, or command-execution assumptions in code and tests.
 
+## Reset / Initial State Cleanup
+
+To return the app to a first-run state, remove only VibePet-owned state and hook entries:
+
+- Stop the running app first so `bridge.sock` is not live.
+- Run `swift run VibePetSetup uninstall all` when possible. It removes VibePet-managed Claude Code and Codex hook entries while preserving user hooks and config.
+- Delete `~/Library/Application Support/VibePet/`. This removes `config.json`, `bridge.sock`, `install-manifest.json`, `backups/`, `bin/VibePetHooks`, and imported pets under `pets/`.
+- Delete only shared pet assets that VibePet should forget from `${CODEX_HOME:-~/.codex}/pets/`; do not remove the whole `~/.codex` directory.
+- If uninstall cannot run, manually remove only hook entries that reference `~/Library/Application Support/VibePet/bin/VibePetHooks` from `~/.claude/settings.json`, and only Codex hook groups marked `statusMessage: "Managed by VibePet"` or referencing that same binary from `~/.codex/hooks.json`.
+- In `~/.codex/config.toml`, remove VibePet-managed `[features]` `hooks = true` / `codex_hooks = true` only when no other Codex hooks remain. Do not delete unrelated Codex settings.
+- Do not delete `~/.claude/`, `~/.codex/`, terminal app state, or user-created pet packages unless the user explicitly asks for a destructive full wipe.
+
 ## Project-Specific Guardrails
 
 - Keep `VibePetCore/` UI-independent. Do not import `AppKit` or `SwiftUI` there; UI belongs in `VibePetApp/`. System side effects needed by Core logic (osascript, etc.) must be exposed through injectable closures so unit tests don't touch the real system.
