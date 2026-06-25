@@ -1,153 +1,66 @@
-import CoreGraphics
+import AppKit
 import Foundation
 import SwiftUI
 import VibePetCore
 
-/// Drives the import → generate panel. The phase logic lives in `VibePetCore`'s
-/// unit-tested `PetImportStateMachine`; this view model only adapts it to SwiftUI
-/// and wires it to `GenerationService` / `PetAssetStore` / `ConfigStore`.
-///
-/// "Failure leaves no half-finished asset" is guaranteed upstream: the generator
-/// writes the sprite only after a successful cutout and throws before any write
-/// on `.noSubject`, so the panel never has to clean up partial assets.
 @MainActor
 final class PetImportViewModel: ObservableObject {
-    @Published private(set) var phase: PetImportStateMachine.Phase = .idle
-    @Published private(set) var progress: Double = 0
-    @Published private(set) var errorMessage: String?
-    @Published private(set) var previewSprite: CGImage?
-    @Published var name: String = ""
+    enum Phase: Equatable {
+        case idle
+        case importing
+        case imported(PetAsset)
+        case error(String)
+    }
 
-    /// Called once the pet is placed (active) so the host can show it on the desktop.
+    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var selectedAsset: PetAsset?
+
     var onPlaced: ((PetAsset) -> Void)?
 
-    private var machine = PetImportStateMachine()
-    private var lastSourceImage: CGImage?
-    private let generation: GenerationService
+    private let importer: PetPackageImporter
     private let configStore: ConfigStore
-    private let store: PetAssetStore
 
     init(
-        generation: GenerationService = GenerationService(),
-        configStore: ConfigStore = ConfigStore(),
-        store: PetAssetStore = PetAssetStore()
+        importer: PetPackageImporter = PetPackageImporter(),
+        configStore: ConfigStore = ConfigStore()
     ) {
-        self.generation = generation
+        self.importer = importer
         self.configStore = configStore
-        self.store = store
     }
 
-    // MARK: - Import
-
-    func importImage(at url: URL) {
-        let sourceName = url.lastPathComponent
-        machine.startGeneration(sourceName: sourceName)
-        guard let image = ImageLoading.cgImage(at: url) else {
-            machine.failGeneration(PetImportError.unreadableImage)
-            sync()
+    func choosePackage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = ImageLoading.acceptedPackageContentTypes
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-        lastSourceImage = image
-        sync()
-        Task { await runGeneration(image: image) }
+        importPackage(from: url)
     }
 
-    func retry() {
-        guard let image = lastSourceImage else {
-            reset()
-            return
+    func importPackage(from url: URL) {
+        phase = .importing
+        do {
+            let asset = try importer.importPackage(from: url)
+            try activate(asset)
+            selectedAsset = asset
+            phase = .imported(asset)
+            onPlaced?(asset)
+        } catch let error as PetAssetError {
+            phase = .error(ErrorPresenter.present(petAssetError: error).message)
+        } catch {
+            phase = .error(ErrorPresenter.present(petAssetError: .invalidPackage(error.localizedDescription)).message)
         }
-        machine.retry()
-        sync()
-        Task { await runGeneration(image: image) }
     }
 
     func reset() {
-        machine.reset()
-        previewSprite = nil
-        name = ""
-        sync()
+        phase = .idle
     }
 
-    // MARK: - Placement
-
-    func place() {
-        guard let asset = machine.generatedAsset, let sprite = machine.generatedSprite else {
-            return
-        }
-        let finalAsset = persistNameIfNeeded(asset, sprite: sprite)
-        activate(finalAsset)
-        machine.place(assetID: finalAsset.id)
-        sync()
-        onPlaced?(finalAsset)
-    }
-
-    // MARK: - Generation
-
-    private func runGeneration(image: CGImage) async {
-        do {
-            let asset = try await generation.generate(from: image) { [weak self] value in
-                Task { @MainActor in
-                    self?.machine.updateProgress(value)
-                    self?.progress = value
-                }
-            }
-            guard let sprite = ImageLoading.cgImage(at: asset.primaryImageURL) else {
-                machine.failGeneration(GenError.encodingFailed)
-                sync()
-                return
-            }
-            machine.finishGeneration(asset: asset, sprite: sprite, suggestedName: machine.suggestedName)
-            previewSprite = sprite
-            name = machine.suggestedName
-            sync()
-        } catch {
-            machine.failGeneration(error)
-            sync()
-        }
-    }
-
-    private func persistNameIfNeeded(_ asset: PetAsset, sprite: CGImage) -> PetAsset {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != asset.metadata["name"] else {
-            return asset
-        }
-        var metadata = asset.metadata
-        metadata["name"] = trimmed
-        let named = PetAsset(
-            id: asset.id,
-            kind: asset.kind,
-            primaryImageURL: asset.primaryImageURL,
-            layers: asset.layers,
-            boundingInset: asset.boundingInset,
-            metadata: metadata
-        )
-        return (try? store.write(named, sprite: sprite)) ?? asset
-    }
-
-    private func activate(_ asset: PetAsset) {
-        do {
-            let current = try configStore.read()
-            try configStore.write(current.with(activePetID: asset.id.uuidString))
-        } catch {
-            NSLog("VibePet failed to set active pet: \(error)")
-        }
-    }
-
-    private func sync() {
-        phase = machine.phase
-        progress = machine.progress
-        errorMessage = machine.errorMessage
-    }
-}
-
-enum PetImportError: LocalizedError {
-    case unreadableImage
-
-    var errorDescription: String? {
-        switch self {
-        case .unreadableImage:
-            return "That file could not be read as an image. Try a JPG, PNG, or HEIC."
-        }
+    private func activate(_ asset: PetAsset) throws {
+        let current = try configStore.read()
+        try configStore.write(current.with(activePetID: asset.slug))
     }
 }

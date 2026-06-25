@@ -59,7 +59,8 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertEqual(envelope.source.projectName, "VibePet")
         XCTAssertEqual(envelope.source.sessionID, "c0ffee123456")
         XCTAssertEqual(envelope.source.sessionShortId, "c0ffee")
-        XCTAssertEqual(envelope.source.jumpTarget?.codexThreadID, "c0ffee123456")
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalApp, "Unknown")
+        XCTAssertEqual(envelope.source.jumpTarget?.workingDirectory, "/Users/dev/Projects/VibePet")
     }
 
     func testNotifyAgentTurnCompletePrefersSessionIDWhenPresent() throws {
@@ -74,7 +75,8 @@ final class CodexAdapterParseTests: XCTestCase {
         let envelope = try XCTUnwrap(adapter.parseEvent(stdin: stdin, env: [:]))
 
         XCTAssertEqual(envelope.source.sessionID, "codex-session-full")
-        XCTAssertEqual(envelope.source.jumpTarget?.codexThreadID, "codex-thread-1")
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalApp, "Unknown")
+        XCTAssertEqual(envelope.source.jumpTarget?.workingDirectory, "/Users/dev/Projects/VibePet")
         guard case let .sessionCompleted(sessionID, _, summary, _, _) = envelope.agentEvent else {
             return XCTFail("Expected sessionCompleted, got \(String(describing: envelope.agentEvent))")
         }
@@ -113,6 +115,31 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertEqual(tool, .codex)
         XCTAssertEqual(summary, "Codex session started")
         XCTAssertFalse(envelope.content.needsResponse)
+    }
+
+    func testSourceInfoCarriesHookCapturedJumpTarget() throws {
+        let adapter = CodexAdapter(terminalJumpCapture: TerminalJumpCapture(
+            currentTTYProvider: { "/dev/ttys003" },
+            terminalLocator: { app in
+                XCTAssertEqual(app, "iTerm")
+                return TerminalJumpCapture.LocatorSnapshot(
+                    sessionID: "iterm-session",
+                    tty: "/dev/ttys333",
+                    title: "Codex"
+                )
+            }
+        ))
+
+        let envelope = try XCTUnwrap(adapter.parseEvent(
+            stdin: fixture("session-start.json"),
+            env: ["TERM_PROGRAM": "iTerm.app"]
+        ))
+
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalApp, "iTerm")
+        XCTAssertEqual(envelope.source.jumpTarget?.workspaceName, "VibePet")
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalSessionID, "iterm-session")
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalTTY, "/dev/ttys333")
+        XCTAssertEqual(envelope.source.jumpTarget?.paneTitle, "Codex")
     }
 
     func testUserPromptSubmitBecomesActivityUpdated() throws {

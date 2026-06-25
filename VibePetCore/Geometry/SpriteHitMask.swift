@@ -9,16 +9,19 @@ import CoreGraphics
 public struct SpriteHitMask: Sendable {
     public let pixelWidth: Int
     public let pixelHeight: Int
-    private let bytesPerRow: Int
+    public let sampleStep: Int
+    private let samplesWide: Int
+    private let samplesHigh: Int
     private let alpha: [UInt8]
 
     /// Builds the mask by rendering `cgImage` into an RGBA8 buffer and keeping the
     /// alpha channel. Returns nil for a degenerate (zero-size) image.
-    public init?(cgImage: CGImage) {
+    public init?(cgImage: CGImage, sampleStep: Int = 1) {
         let width = cgImage.width
         let height = cgImage.height
         guard width > 0, height > 0 else { return nil }
 
+        let step = max(1, sampleStep)
         let bytesPerRow = width * 4
         var buffer = [UInt8](repeating: 0, count: bytesPerRow * height)
         let drew = buffer.withUnsafeMutableBytes { raw -> Bool in
@@ -38,10 +41,29 @@ public struct SpriteHitMask: Sendable {
         }
         guard drew else { return nil }
 
+        let samplesWide = (width + step - 1) / step
+        let samplesHigh = (height + step - 1) / step
+        var sampledAlpha = [UInt8](repeating: 0, count: samplesWide * samplesHigh)
+        for sampleY in 0..<samplesHigh {
+            for sampleX in 0..<samplesWide {
+                var maxAlpha: UInt8 = 0
+                let xStart = sampleX * step
+                let yStart = sampleY * step
+                for y in yStart..<min(yStart + step, height) {
+                    for x in xStart..<min(xStart + step, width) {
+                        maxAlpha = max(maxAlpha, buffer[y * bytesPerRow + x * 4 + 3])
+                    }
+                }
+                sampledAlpha[sampleY * samplesWide + sampleX] = maxAlpha
+            }
+        }
+
         self.pixelWidth = width
         self.pixelHeight = height
-        self.bytesPerRow = bytesPerRow
-        self.alpha = buffer
+        self.sampleStep = step
+        self.samplesWide = samplesWide
+        self.samplesHigh = samplesHigh
+        self.alpha = sampledAlpha
     }
 
     /// Whether the sprite is opaque at `point`, given the hosting view's `bounds`.
@@ -73,7 +95,9 @@ public struct SpriteHitMask: Sendable {
             return false
         }
 
-        let index = pixelY * bytesPerRow + pixelX * 4 + 3
+        let sampleX = min(samplesWide - 1, pixelX / sampleStep)
+        let sampleY = min(samplesHigh - 1, pixelY / sampleStep)
+        let index = sampleY * samplesWide + sampleX
         return alpha[index] > threshold
     }
 }

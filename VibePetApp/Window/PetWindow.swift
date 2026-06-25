@@ -1,26 +1,39 @@
 import AppKit
 import CoreGraphics
 
-final class PetWindow: NSWindow {
+final class PetWindow: NSPanel {
     static let defaultSpriteSize = CGSize(width: 120, height: 120)
+    static let overlayCollectionBehavior: NSWindow.CollectionBehavior = [
+        .canJoinAllSpaces,
+        .fullScreenAuxiliary,
+        .stationary,
+        .ignoresCycle
+    ]
 
     init(frame: CGRect) {
         super.init(
             contentRect: frame,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
+        isFloatingPanel = true
+        hidesOnDeactivate = false
+        becomesKeyOnlyIfNeeded = false
         isOpaque = false
         backgroundColor = .clear
         level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        collectionBehavior = Self.overlayCollectionBehavior
         hasShadow = false
         isReleasedWhenClosed = false
         acceptsMouseMovedEvents = true
     }
 
     override var canBecomeKey: Bool {
-        true
+        false
+    }
+
+    override var canBecomeMain: Bool {
+        false
     }
 }

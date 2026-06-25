@@ -2,18 +2,18 @@
 
 ## Purpose
 
-Define a unified, UI-framework-independent error presenter that maps generation, installation, and bridge errors to readable messages and suggested actions for consumption across the app's surfaces.
+Define a unified, UI-framework-independent error presenter that maps pet import, installation, and bridge errors to readable messages and suggested actions for consumption across the app's surfaces.
 
 ## Requirements
 
 ### Requirement: Unified error presentation maps errors to readable guidance
 
-`VibePetApp` SHALL provide an `ErrorPresenter` that maps generation, installation, and bridge errors to a readable message and a suggested action, per the technical design §7 error table. The mapping logic SHALL be UI-framework-independent (testable without AppKit/SwiftUI) and consumed by the import panel, settings page, and bubbles.
+`VibePetApp` SHALL provide an `ErrorPresenter` that maps Codex pet package import, installation, and bridge errors to a readable message and a suggested action. The mapping logic SHALL be UI-framework-independent (testable without AppKit/SwiftUI) and consumed by the import panel, settings page, and bubbles.
 
-#### Scenario: No-subject generation error suggests another photo
+#### Scenario: Invalid pet package explains the package contract
 
-- **WHEN** generation fails with `GenError.noSubject`
-- **THEN** the presenter yields a readable message and a "try another photo / retry" suggested action
+- **WHEN** importing a pet fails because `pet.json` or the spritesheet is missing or invalid
+- **THEN** the presenter yields a readable message and guidance to provide a Codex pet zip or folder
 
 #### Scenario: Codex needs-trust maps to /hooks guidance
 

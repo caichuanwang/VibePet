@@ -42,6 +42,19 @@ public struct SessionState: Equatable, Sendable {
         return .idle
     }
 
+    public var petVisualState: PetVisualState {
+        if activeActionableSession != nil {
+            return .waiting
+        }
+        if visibleSessions.contains(where: { $0.phase == .completed && $0.isError }) {
+            return .failed
+        }
+        if runningCount > 0 {
+            return .running
+        }
+        return .idle
+    }
+
     public var nextUngreetedRunningSessionID: String? {
         sessionsByID.values
             .filter { $0.phase == .running && !greetedSessionIDs.contains($0.id) }

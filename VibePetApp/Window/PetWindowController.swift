@@ -9,6 +9,7 @@ final class PetWindowController: NSWindowController {
     /// Opaque-pixel mask of the current sprite, used both to maintain mouse
     /// passthrough and to reject clicks on transparent pixels.
     private var hitMask: SpriteHitMask?
+    private var hitMasksByFrame: [ObjectIdentifier: SpriteHitMask] = [:]
     private var mouseMonitors: [Any] = []
 
     init(frame: CGRect, configStore: ConfigStore) {
@@ -33,9 +34,19 @@ final class PetWindowController: NSWindowController {
     }
 
     /// Sets the sprite whose opaque pixels define the clickable pet body; pass
-    /// nil to make the whole frame interactive (e.g. the onboarding placeholder).
+    /// nil only when the whole frame should be interactive.
     func setHitSprite(_ cgImage: CGImage?) {
-        let mask = cgImage.flatMap(SpriteHitMask.init(cgImage:))
+        let mask = cgImage.flatMap { image in
+            let key = ObjectIdentifier(image)
+            if let cached = hitMasksByFrame[key] {
+                return cached
+            }
+            guard let created = SpriteHitMask(cgImage: image, sampleStep: 4) else {
+                return nil
+            }
+            hitMasksByFrame[key] = created
+            return created
+        }
         hitMask = mask
         hitTestView.hitMask = mask
         updateMousePassthrough()

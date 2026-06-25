@@ -21,6 +21,7 @@ final class BridgeServerHost {
     private let manifestStore: InstallManifestStore
     private let liveSessionProvider: @Sendable (SessionState) async -> Set<String>
     private let livenessInterval: TimeInterval
+    private let terminalJumpResolver: TerminalJumpTargetResolver
     private let onSessionStateChange: @MainActor (SessionState) -> Void
     private var sessionState = SessionState()
     private var server: BridgeServer?
@@ -47,6 +48,7 @@ final class BridgeServerHost {
             await AgentProcessLiveness.liveSessionIDs(in: $0)
         },
         livenessInterval: TimeInterval = 5,
+        terminalJumpResolver: TerminalJumpTargetResolver = TerminalJumpTargetResolver(),
         onSessionStateChange: @escaping @MainActor (SessionState) -> Void = { _ in }
     ) {
         self.petController = petController
@@ -55,6 +57,7 @@ final class BridgeServerHost {
             ?? InstallManifestStore(applicationSupportRoot: socketPath.applicationSupportRoot)
         self.liveSessionProvider = liveSessionProvider
         self.livenessInterval = livenessInterval
+        self.terminalJumpResolver = terminalJumpResolver
         self.onSessionStateChange = onSessionStateChange
     }
 
@@ -140,6 +143,18 @@ final class BridgeServerHost {
     func runLivenessSweepOnce() async {
         let aliveSessionIDs = await liveSessionProvider(sessionState)
         sessionState.markProcessLiveness(aliveSessionIDs: aliveSessionIDs)
+        let visibleSessions = sessionState.visibleSessions
+        let resolver = terminalJumpResolver
+        let jumpTargetUpdates = await Task.detached(priority: .utility) {
+            resolver.resolveJumpTargets(for: visibleSessions)
+        }.value
+        for (sessionID, jumpTarget) in jumpTargetUpdates {
+            sessionState.apply(.jumpTargetUpdated(
+                sessionID: sessionID,
+                timestamp: .now,
+                jumpTarget: jumpTarget
+            ))
+        }
         sessionState.removeInvisibleSessions()
         publishSessionState()
     }
@@ -167,14 +182,11 @@ final class BridgeServerHost {
     }
 
     private func rekeyEventIfNeeded(_ event: AgentEvent, source: SourceInfo) -> AgentEvent {
-        guard sessionState.sessionsByID[event.sessionID] == nil else {
+        if case .sessionStarted = event {
             return event
         }
-        if let codexThreadID = source.jumpTarget?.codexThreadID,
-           let matchingSession = sessionState.sessionsByID.values.first(where: {
-               $0.tool == source.tool && $0.jumpTarget?.codexThreadID == codexThreadID
-           }) {
-            return event.rekeyed(to: matchingSession.id)
+        guard sessionState.sessionsByID[event.sessionID] == nil else {
+            return event
         }
         if let cwd = source.cwd,
            let matchingSession = uniquelyMatchedSession(tool: source.tool, workingDirectory: cwd) {
@@ -304,6 +316,11 @@ final class BridgeServerHost {
         case .codex:
             "Codex"
         }
+    }
+
+    func applyForTesting(_ event: AgentEvent) {
+        sessionState.apply(event)
+        publishSessionState()
     }
 }
 

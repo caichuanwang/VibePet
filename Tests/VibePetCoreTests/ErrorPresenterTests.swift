@@ -1,21 +1,23 @@
 import XCTest
 @testable import VibePetCore
 
-/// M6-7: `ErrorPresenter` maps generation / install / trust conditions to a readable
+/// M6-7: `ErrorPresenter` maps import / install / trust conditions to a readable
 /// message + suggested action (technical design §7). Pure (no AppKit/SwiftUI) so it is
 /// unit-testable and shared by the import panel, settings page, and bubbles.
 final class ErrorPresenterTests: XCTestCase {
-    func testNoSubjectSuggestsAnotherPhoto() {
-        let presented = ErrorPresenter.present(generationError: .noSubject)
+    func testInvalidPetPackageKeepsReadableReason() {
+        let presented = ErrorPresenter.present(petAssetError: .invalidPackage("spritesheet must be 1536x1872"))
+
         XCTAssertFalse(presented.message.isEmpty)
-        let action = presented.suggestedAction ?? ""
-        XCTAssertTrue(action.contains("换一张") || action.contains("重试"), "should suggest another photo / retry")
+        XCTAssertTrue(presented.message.contains("1536x1872"))
+        XCTAssertTrue((presented.suggestedAction ?? "").contains("Codex"))
     }
 
-    func testOtherGenerationErrorsHaveReadableMessage() {
-        for error in [GenError.encodingFailed, .writeFailed("disk full"), .defaultGeneratorUnavailable("x")] {
-            XCTAssertFalse(ErrorPresenter.present(generationError: error).message.isEmpty)
-        }
+    func testPetPackageWriteFailureMentionsRetry() {
+        let presented = ErrorPresenter.present(petAssetError: .writeFailed("disk full"))
+
+        XCTAssertTrue(presented.message.contains("disk full"))
+        XCTAssertTrue((presented.suggestedAction ?? "").contains("重试"))
     }
 
     func testCodexNeedsTrustGuidesToHooks() throws {

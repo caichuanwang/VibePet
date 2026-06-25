@@ -5,12 +5,12 @@ TBD - created by archiving change implement-m2-desktop-pet-window. Update Purpos
 ## Requirements
 ### Requirement: Menu bar status item with core entries
 
-`VibePetApp` SHALL provide an `NSStatusItem` whose menu contains entries for: show/hide pet, switch pet, import new photo, open settings, and quit (technical design §5.4). Each entry SHALL be wired to the corresponding behavior.
+`VibePetApp` SHALL provide an `NSStatusItem` whose menu contains entries for: show/hide pet, switch pet, import pet, open settings, and quit (technical design §5.4). Each entry SHALL be wired to the corresponding behavior.
 
 #### Scenario: Menu exposes all core entries
 
 - **WHEN** the user opens the menu bar status item
-- **THEN** the menu lists show/hide pet, switch pet, import new photo, open settings, and quit
+- **THEN** the menu lists show/hide pet, switch pet, import pet, open settings, and quit
 
 #### Scenario: Show/hide toggles pet window visibility
 
@@ -19,8 +19,8 @@ TBD - created by archiving change implement-m2-desktop-pet-window. Update Purpos
 
 #### Scenario: Import opens the import panel
 
-- **WHEN** the user selects "import new photo"
-- **THEN** the import → generate panel (`PetImportPanel`) is presented
+- **WHEN** the user selects "import pet"
+- **THEN** the Codex pet import panel (`PetImportPanel`) is presented
 
 #### Scenario: Switch pet changes the active pet
 

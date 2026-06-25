@@ -62,7 +62,7 @@ final class StatusItemController {
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem(title: "显示 / 隐藏宠物") { [weak self] in self?.actions.togglePetVisibility() })
         menu.addItem(switchPetItem())
-        menu.addItem(ActionMenuItem(title: "导入新照片…") { [weak self] in self?.actions.importNewPhoto() })
+        menu.addItem(ActionMenuItem(title: "导入宠物…") { [weak self] in self?.actions.importNewPhoto() })
         menu.addItem(ActionMenuItem(title: "打开设置…") { [weak self] in self?.actions.openSettings() })
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem(title: "退出 VibePet", key: "q") { [weak self] in self?.actions.quit() })
@@ -74,7 +74,7 @@ final class StatusItemController {
         let entries = petsProvider()
         let submenu = NSMenu()
         if entries.isEmpty {
-            let empty = NSMenuItem(title: "（还没有宠物）", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: "（还没有可用宠物）", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             submenu.addItem(empty)
         } else {

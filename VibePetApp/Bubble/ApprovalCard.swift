@@ -31,11 +31,18 @@ struct ApprovalCard: View {
     /// Activating "回终端处理" defers so the tool falls back to its native flow.
     static let terminalResponse: BridgeResponse = .defer
 
+    static func jumpBack(from source: SourceInfo, onJump: (JumpTarget) -> Void) {
+        if let jumpTarget = source.jumpTarget {
+            onJump(jumpTarget)
+        }
+    }
+
     let content: ApprovalContent
     let source: SourceInfo
     var tailEdge: SpeechBubble.TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
     let timeout: TimeInterval
+    var onJump: (JumpTarget) -> Void = { _ in }
     var onDecision: (BridgeResponse) -> Void = { _ in }
 
     @ObservedObject var presentation: ApprovalPresentation
@@ -49,6 +56,7 @@ struct ApprovalCard: View {
         tailOffsetX: CGFloat = 40,
         timeout: TimeInterval,
         presentation: ApprovalPresentation,
+        onJump: @escaping (JumpTarget) -> Void = { _ in },
         onDecision: @escaping (BridgeResponse) -> Void = { _ in }
     ) {
         self.content = content
@@ -57,6 +65,7 @@ struct ApprovalCard: View {
         self.tailOffsetX = tailOffsetX
         self.timeout = timeout
         self.presentation = presentation
+        self.onJump = onJump
         self.onDecision = onDecision
         _remaining = State(initialValue: timeout)
     }
@@ -71,6 +80,17 @@ struct ApprovalCard: View {
         .padding(tailEdge == .bottom ? .bottom : .top, BubbleTheme.tailSize.height)
         .frame(minWidth: BubbleTheme.minWidth, maxWidth: BubbleTheme.maxWidth, alignment: .leading)
         .background(bubbleBackground)
+        .contentShape(
+            BubbleShape(
+                cornerRadius: BubbleTheme.cornerRadius,
+                tailEdge: tailEdge,
+                tailOffsetX: tailOffsetX,
+                tailSize: BubbleTheme.tailSize
+            )
+        )
+        .onTapGesture(count: 2) {
+            Self.jumpBack(from: source, onJump: onJump)
+        }
         .task { await runCountdown() }
         .onAppear { focus = content.risk == .high ? .deny : .allow }
         .accessibilityElement(children: .contain)
@@ -201,6 +221,7 @@ struct ApprovalCard: View {
     }
 
     private func handleInTerminal() {
+        Self.jumpBack(from: source, onJump: onJump)
         // Copy the action summary so the user can locate/paste it in the terminal,
         // then defer to the tool's native flow.
         let pasteboard = NSPasteboard.general

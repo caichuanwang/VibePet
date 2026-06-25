@@ -3,47 +3,33 @@ import Foundation
 import XCTest
 
 final class PetAssetCodecTests: XCTestCase {
-    func testPetAssetCodableRoundTripsAllFields() throws {
+    func testPetAssetCodableRoundTripsCodexFolderReference() throws {
         let asset = PetAsset(
-            id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
-            kind: .sprite2D,
-            primaryImageURL: URL(fileURLWithPath: "/tmp/VibePet/pets/asset/sprite.png"),
-            layers: [
-                PetLayer(
-                    id: "eyes",
-                    imageURL: URL(fileURLWithPath: "/tmp/VibePet/pets/asset/eyes.png"),
-                    zIndex: 2,
-                    metadata: ["animation": "blink"]
-                )
-            ],
-            boundingInset: PetEdgeInsets(top: 1.25, leading: 2.5, bottom: 3.75, trailing: 4.0),
-            metadata: ["generator": "local-cutout", "source": "unit-test"]
+            slug: "boba",
+            displayName: "Boba",
+            description: "A tiny otter sipping bubble tea.",
+            source: .imported,
+            folderURL: URL(fileURLWithPath: "/tmp/VibePet/pets/boba", isDirectory: true),
+            spritesheetURL: URL(fileURLWithPath: "/tmp/VibePet/pets/boba/spritesheet.webp"),
+            customAnimations: [
+                .idle: SpriteAnimationSpec(row: 0, durationsMs: [10, 20, 30, 40, 50, 60])
+            ]
         )
 
         let data = try JSONEncoder().encode(asset)
         let decoded = try JSONDecoder().decode(PetAsset.self, from: data)
 
         XCTAssertEqual(decoded, asset)
+        XCTAssertEqual(decoded.id, "boba")
     }
 
-    func testPetKindRawValuesAreStable() throws {
-        XCTAssertEqual(PetKind.sprite2D.rawValue, "sprite2D")
-        XCTAssertEqual(PetKind.stylized2D.rawValue, "stylized2D")
-        XCTAssertEqual(PetKind.model3D.rawValue, "model3D")
+    func testPetSourceRawValuesAreStable() throws {
+        XCTAssertEqual(PetAsset.Source.imported.rawValue, "imported")
+        XCTAssertEqual(PetAsset.Source.shared.rawValue, "shared")
 
-        for kind in [PetKind.sprite2D, .stylized2D, .model3D] {
-            let data = try JSONEncoder().encode(kind)
-            XCTAssertEqual(try JSONDecoder().decode(PetKind.self, from: data), kind)
+        for source in [PetAsset.Source.imported, .shared] {
+            let data = try JSONEncoder().encode(source)
+            XCTAssertEqual(try JSONDecoder().decode(PetAsset.Source.self, from: data), source)
         }
-    }
-
-    func testNoSubjectIsDistinguishable() {
-        let error: GenError = .noSubject
-
-        guard case .noSubject = error else {
-            return XCTFail("Expected noSubject to be matchable")
-        }
-
-        XCTAssertNotEqual(error, .encodingFailed)
     }
 }

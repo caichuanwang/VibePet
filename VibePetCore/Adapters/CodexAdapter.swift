@@ -21,6 +21,7 @@ public struct CodexAdapter: ToolAdapter {
     public let tool: ToolKind = .codex
 
     private let riskClassifier: RiskClassifier
+    private let terminalJumpCapture: TerminalJumpCapture
 
     static let completionFallback = "Codex 完成了一轮任务"
     static let terminalApprovalTitle = "需在终端处理"
@@ -33,8 +34,12 @@ public struct CodexAdapter: ToolAdapter {
         self.init(riskClassifier: RiskClassifier())
     }
 
-    init(riskClassifier: RiskClassifier = RiskClassifier()) {
+    init(
+        riskClassifier: RiskClassifier = RiskClassifier(),
+        terminalJumpCapture: TerminalJumpCapture = .live
+    ) {
         self.riskClassifier = riskClassifier
+        self.terminalJumpCapture = terminalJumpCapture
     }
 
     public func parseEvent(stdin: Data, env: [String: String]) throws -> BridgeEnvelope? {
@@ -46,7 +51,7 @@ public struct CodexAdapter: ToolAdapter {
         // VibePet installs the `Stop` hook instead, but notify is still parsed for
         // robustness if a user wires it up.
         if (object["type"] as? String) == "agent-turn-complete" {
-            let source = makeSource(from: object, sessionKeys: ["session_id", "thread-id", "thread_id", "turn-id"])
+            let source = makeSource(from: object, env: env, sessionKeys: ["session_id", "thread-id", "thread_id", "turn-id"])
             return makeCompletionEnvelope(
                 summary: (object["last-assistant-message"] as? String).flatMap(nonEmpty),
                 source: source,
@@ -59,18 +64,18 @@ public struct CodexAdapter: ToolAdapter {
         }
         switch event {
         case "PermissionRequest":
-            return makePermissionEnvelope(from: object)
+            return makePermissionEnvelope(from: object, env: env)
         case "Stop":
             // Turn-completion: VibePet registers a Codex `Stop` hook (open-vibe-island
             // pattern) and shows the last assistant message as a completion.
-            let source = makeSource(from: object)
+            let source = makeSource(from: object, env: env)
             return makeCompletionEnvelope(
                 summary: (object["last_assistant_message"] as? String).flatMap(nonEmpty),
                 source: source,
                 agentEvent: makeAgentEvent(from: object, source: source)
             )
         case "SessionStart", "UserPromptSubmit":
-            let source = makeSource(from: object)
+            let source = makeSource(from: object, env: env)
             guard let agentEvent = makeAgentEvent(from: object, source: source) else { return nil }
             return makeEnvelope(
                 source: source,
@@ -88,10 +93,10 @@ public struct CodexAdapter: ToolAdapter {
             return nil
         }
         if (object["type"] as? String) == "agent-turn-complete" {
-            let source = makeSource(from: object, sessionKeys: ["session_id", "thread-id", "thread_id", "turn-id"])
+            let source = makeSource(from: object, env: env, sessionKeys: ["session_id", "thread-id", "thread_id", "turn-id"])
             return makeCompletionEvent(from: object, source: source)
         }
-        return makeAgentEvent(from: object, source: makeSource(from: object))
+        return makeAgentEvent(from: object, source: makeSource(from: object, env: env))
     }
 
     public func encodeResponse(_ response: BridgeResponse, for envelope: BridgeEnvelope) -> Data {
@@ -108,11 +113,11 @@ public struct CodexAdapter: ToolAdapter {
 
     // MARK: - PermissionRequest → approval
 
-    private func makePermissionEnvelope(from object: [String: Any]) -> BridgeEnvelope? {
+    private func makePermissionEnvelope(from object: [String: Any], env: [String: String]) -> BridgeEnvelope? {
         guard let toolName = (object["tool_name"] as? String).flatMap(nonEmpty) else {
             return nil
         }
-        let source = makeSource(from: object)
+        let source = makeSource(from: object, env: env)
         let agentEvent = makeAgentEvent(from: object, source: source)
         let input = object["tool_input"] as? [String: Any] ?? [:]
 
@@ -237,7 +242,11 @@ public struct CodexAdapter: ToolAdapter {
 
     // MARK: - Helpers
 
-    private func makeSource(from object: [String: Any], sessionKeys: [String] = ["session_id"]) -> SourceInfo {
+    private func makeSource(
+        from object: [String: Any],
+        env: [String: String],
+        sessionKeys: [String] = ["session_id"]
+    ) -> SourceInfo {
         let cwd = (object["cwd"] as? String).flatMap(nonEmpty)
         let projectName = cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
         let sessionID = sessionKeys
@@ -246,17 +255,7 @@ public struct CodexAdapter: ToolAdapter {
             .first
         let sessionShortId = sessionID
             .map { String($0.prefix(6)) }
-        let threadID = ["thread_id", "thread-id", "threadId"]
-            .lazy
-            .compactMap { (object[$0] as? String).flatMap(nonEmpty) }
-            .first
-        let jumpTarget: JumpTarget? = (threadID != nil || cwd != nil) ? {
-            JumpTarget(
-                terminalApp: "Codex",
-                workingDirectory: cwd,
-                codexThreadID: threadID
-            )
-        }() : nil
+        let eventName = object["hook_event_name"] as? String
 
         return SourceInfo(
             tool: .codex,
@@ -264,7 +263,7 @@ public struct CodexAdapter: ToolAdapter {
             sessionID: sessionID,
             sessionShortId: sessionShortId,
             cwd: cwd,
-            jumpTarget: jumpTarget
+            jumpTarget: terminalJumpCapture.buildJumpTarget(env: env, cwd: cwd, hookEventName: eventName)
         )
     }
 

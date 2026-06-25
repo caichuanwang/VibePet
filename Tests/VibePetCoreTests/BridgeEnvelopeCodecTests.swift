@@ -75,8 +75,8 @@ final class BridgeEnvelopeCodecTests: XCTestCase {
                     workspaceName: "VibePet",
                     paneTitle: "Codex",
                     workingDirectory: "/tmp/VibePet",
-                    terminalTTY: "/dev/ttys002",
-                    codexThreadID: "thread-1"
+                    terminalSessionID: "tab-1",
+                    terminalTTY: "/dev/ttys002"
                 )
             ),
             content: .status(StatusContent(text: "Working"))
@@ -89,7 +89,8 @@ final class BridgeEnvelopeCodecTests: XCTestCase {
         XCTAssertEqual(decoded.source.sessionID, "codex-session-full")
         XCTAssertEqual(decoded.source.sessionShortId, "codex-")
         XCTAssertNotEqual(decoded.source.sessionID, decoded.source.sessionShortId)
-        XCTAssertEqual(decoded.source.jumpTarget?.codexThreadID, "thread-1")
+        XCTAssertEqual(decoded.source.jumpTarget?.terminalSessionID, "tab-1")
+        XCTAssertEqual(decoded.source.jumpTarget?.terminalTTY, "/dev/ttys002")
     }
 
     func testSourceInfoMissingSessionIDUsesDeterministicFallback() throws {

@@ -27,23 +27,23 @@ public struct JumpTarget: Codable, Equatable, Sendable {
     public var workspaceName: String?
     public var paneTitle: String?
     public var workingDirectory: String?
+    public var terminalSessionID: String?
     public var terminalTTY: String?
-    public var codexThreadID: String?
 
     public init(
         terminalApp: String,
         workspaceName: String? = nil,
         paneTitle: String? = nil,
         workingDirectory: String? = nil,
-        terminalTTY: String? = nil,
-        codexThreadID: String? = nil
+        terminalSessionID: String? = nil,
+        terminalTTY: String? = nil
     ) {
         self.terminalApp = terminalApp
         self.workspaceName = workspaceName
         self.paneTitle = paneTitle
         self.workingDirectory = workingDirectory
+        self.terminalSessionID = terminalSessionID
         self.terminalTTY = terminalTTY
-        self.codexThreadID = codexThreadID
     }
 }
 

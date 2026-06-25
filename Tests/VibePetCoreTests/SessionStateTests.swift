@@ -18,13 +18,40 @@ final class SessionStateTests: XCTestCase {
             workspaceName: "VibePet",
             paneTitle: "swift test",
             workingDirectory: "/tmp/VibePet",
-            terminalTTY: "/dev/ttys001",
-            codexThreadID: "thread-123"
+            terminalSessionID: "session-123",
+            terminalTTY: "/dev/ttys001"
         )
 
         let decoded = try roundTrip(target)
 
         XCTAssertEqual(decoded, target)
+    }
+
+    func testJumpTargetDecodesLegacyUnsupportedKeys() throws {
+        let data = Data(
+            """
+            {
+              "terminalApp": "Terminal",
+              "workspaceName": "VibePet",
+              "paneTitle": "swift test",
+              "workingDirectory": "/tmp/VibePet",
+              "terminalTTY": "/dev/ttys001",
+              "codexThreadID": "thread-123",
+              "tmuxTarget": "session:1.2",
+              "tmuxSocketPath": "/tmp/tmux.sock",
+              "warpPaneUUID": "warp-pane"
+            }
+            """.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(JumpTarget.self, from: data)
+
+        XCTAssertEqual(decoded.terminalApp, "Terminal")
+        XCTAssertEqual(decoded.workspaceName, "VibePet")
+        XCTAssertEqual(decoded.paneTitle, "swift test")
+        XCTAssertEqual(decoded.workingDirectory, "/tmp/VibePet")
+        XCTAssertNil(decoded.terminalSessionID)
+        XCTAssertEqual(decoded.terminalTTY, "/dev/ttys001")
     }
 
     func testAgentSessionRoundTripsThroughCodable() throws {
@@ -134,6 +161,31 @@ final class SessionStateTests: XCTestCase {
 
         XCTAssertEqual(state.sessionsByID["s1"]?.phase, .waitingForApproval)
         XCTAssertEqual(state.sessionsByID["s1"]?.summary, "Still working")
+    }
+
+    func testJumpTargetUpdatedChangesOnlyJumpTargetAndTimestamp() {
+        var state = state(applying: [
+            started("s1", at: base),
+            .permissionRequested(sessionID: "s1", timestamp: base.addingTimeInterval(1), summary: "Approve"),
+        ])
+        state.apply(.jumpTargetUpdated(
+            sessionID: "s1",
+            timestamp: base.addingTimeInterval(2),
+            jumpTarget: JumpTarget(
+                terminalApp: "Terminal",
+                terminalSessionID: "session-1",
+                terminalTTY: "/dev/ttys001"
+            )
+        ))
+
+        let session = state.sessionsByID["s1"]
+        XCTAssertEqual(session?.jumpTarget?.terminalSessionID, "session-1")
+        XCTAssertEqual(session?.jumpTarget?.terminalTTY, "/dev/ttys001")
+        XCTAssertEqual(session?.phase, .waitingForApproval)
+        XCTAssertTrue(session?.isProcessAlive == true)
+        XCTAssertFalse(session?.isSessionEnded == true)
+        XCTAssertEqual(session?.processNotSeenCount, 0)
+        XCTAssertEqual(session?.updatedAt, base.addingTimeInterval(2))
     }
 
     func testUnknownSessionNonStartEventsAreIgnored() {

@@ -15,6 +15,9 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     /// Tags approval risk from the tool name + command pattern.
     private let riskClassifier: RiskClassifier
 
+    /// Captures a best-effort terminal jump target from hook environment.
+    private let terminalJumpCapture: TerminalJumpCapture
+
     /// Used when a `Stop` event carries no displayable summary.
     static let completionFallback = "Claude Code 完成了一轮任务"
     static let notificationFallback = "Claude Code 有新通知"
@@ -31,10 +34,12 @@ public struct ClaudeCodeAdapter: ToolAdapter {
 
     init(
         transcriptSummaryReader: @escaping @Sendable (String) -> String?,
-        riskClassifier: RiskClassifier = RiskClassifier()
+        riskClassifier: RiskClassifier = RiskClassifier(),
+        terminalJumpCapture: TerminalJumpCapture = .live
     ) {
         self.transcriptSummaryReader = transcriptSummaryReader
         self.riskClassifier = riskClassifier
+        self.terminalJumpCapture = terminalJumpCapture
     }
 
     public func parseEvent(stdin: Data, env: [String: String]) throws -> BridgeEnvelope? {
@@ -45,7 +50,7 @@ public struct ClaudeCodeAdapter: ToolAdapter {
             return nil
         }
 
-        let source = makeSource(from: object)
+        let source = makeSource(from: object, env: env)
         let agentEvent = makeAgentEvent(from: object, source: source)
 
         switch eventName {
@@ -86,7 +91,7 @@ public struct ClaudeCodeAdapter: ToolAdapter {
         guard let object = try? JSONSerialization.jsonObject(with: stdin) as? [String: Any] else {
             return nil
         }
-        return makeAgentEvent(from: object, source: makeSource(from: object))
+        return makeAgentEvent(from: object, source: makeSource(from: object, env: env))
     }
 
     public func encodeResponse(_ response: BridgeResponse, for envelope: BridgeEnvelope) -> Data {
@@ -377,19 +382,21 @@ public struct ClaudeCodeAdapter: ToolAdapter {
 
     // MARK: - Helpers
 
-    private func makeSource(from object: [String: Any]) -> SourceInfo {
+    private func makeSource(from object: [String: Any], env: [String: String]) -> SourceInfo {
         let cwd = (object["cwd"] as? String).flatMap(nonEmpty)
         let projectName = cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
         let sessionID = (object["session_id"] as? String).flatMap(nonEmpty)
         let sessionShortId = sessionID
             .map { String($0.prefix(6)) }
+        let eventName = object["hook_event_name"] as? String
 
         return SourceInfo(
             tool: .claudeCode,
             projectName: projectName,
             sessionID: sessionID,
             sessionShortId: sessionShortId,
-            cwd: cwd
+            cwd: cwd,
+            jumpTarget: terminalJumpCapture.buildJumpTarget(env: env, cwd: cwd, hookEventName: eventName)
         )
     }
 

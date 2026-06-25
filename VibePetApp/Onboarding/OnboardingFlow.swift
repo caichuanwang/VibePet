@@ -1,53 +1,89 @@
 import SwiftUI
 import VibePetCore
 
-/// First-launch onboarding: ① welcome → ② generate pet (reusing `PetImportPanel`)
-/// → ③ install hooks (only the detected tools, skippable). Wired up in M6
-/// (technical design §5.4, PRD US-0①②③).
 struct OnboardingFlow: View {
     @ObservedObject var importViewModel: PetImportViewModel
     @ObservedObject var hooks: HookInstallCoordinator
-    /// Called when the user finishes onboarding (after the pet is placed and the
-    /// step-③ hooks step is dismissed/skipped).
     var onFinished: () -> Void
 
-    @State private var started = false
+    @State private var step: Step = .welcome
+    @State private var pets: [PetAsset] = []
+    @State private var selectedSlug: String?
+
+    private let store = PetAssetStore()
+    private let configStore = ConfigStore()
 
     var body: some View {
         VStack(spacing: 20) {
-            if !started {
+            switch step {
+            case .welcome:
                 welcomeView
-            } else if importViewModel.phase == .placed {
+            case .pet:
+                petStep
+            case .hooks:
                 installHooksStep
-            } else {
-                generateView
             }
         }
         .padding(28)
         .frame(minWidth: 420)
+        .onAppear { refreshPets() }
     }
 
     private var welcomeView: some View {
         VStack(spacing: 16) {
-            Text("🐾").font(.system(size: 56))
+            Image(systemName: "pawprint.fill").font(.system(size: 48))
             Text("欢迎来到 VibePet").font(.title2.bold())
-            Text("把一张照片变成桌面宠物，它会在你写代码时陪着你，并在需要决策时叫你。")
+            Text("选择一个 Codex 宠物，它会在你写代码时陪着你，并在需要决策时叫你。")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 360)
-            Button("开始") { started = true }
+            Button("开始") { step = .pet }
                 .keyboardShortcut(.defaultAction)
                 .controlSize(.large)
         }
     }
 
-    private var generateView: some View {
-        VStack(spacing: 10) {
-            Text("生成你的宠物").font(.headline)
-            Text("导入一张照片，VibePet 会自动抠出主体。")
+    private var petStep: some View {
+        VStack(spacing: 14) {
+            Text("挑一个宠物").font(.headline)
+            if pets.isEmpty {
+                emptyPetView
+            } else {
+                Picker("宠物", selection: Binding(
+                    get: { selectedSlug ?? pets.first?.slug ?? "" },
+                    set: { selectedSlug = $0 }
+                )) {
+                    ForEach(pets) { pet in
+                        Text(pet.displayName).tag(pet.slug)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            PetImportPanel(viewModel: importViewModel)
+                .onChange(of: importViewModel.selectedAsset) { _, asset in refreshPets(preferred: asset?.slug) }
+
+            HStack {
+                Button("以后再说") { step = .hooks }
+                Button("继续") {
+                    persistSelectionIfNeeded()
+                    step = .hooks
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private var emptyPetView: some View {
+        VStack(spacing: 8) {
+            Text("还没有可用宠物")
+                .font(.subheadline.bold())
+            Text("可以用任意方式把宠物装进 ~/.codex/pets/，也可以直接拖入一个 Codex 宠物 zip 或文件夹。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            PetImportPanel(viewModel: importViewModel)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 340)
         }
     }
 
@@ -56,13 +92,12 @@ struct OnboardingFlow: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(.green)
-            Text("宠物准备好了！").font(.title3.bold())
+            Text("准备好了").font(.title3.bold())
             Text("给检测到的工具安装提醒 hooks，宠物就能在审批/完成时叫你。也可以以后再说。")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 360)
 
-            // Only when a detected tool has a pre-existing, repairable broken install.
             if hooks.hasRepairableDriftAmongDetected() {
                 Label("检测到既有配置异常，点下方「修复」即可一键修正。", systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
@@ -80,8 +115,27 @@ struct OnboardingFlow: View {
                     .buttonStyle(.borderedProminent)
             }
         }
-        // Refresh on arrival: the coordinator was built at launch, but the user only
-        // reaches this step after generating a pet, so detection/health may be stale.
         .onAppear { hooks.refresh() }
+    }
+
+    private func refreshPets(preferred: String? = nil) {
+        pets = (try? store.list()) ?? []
+        selectedSlug = PetSelection.resolve(current: selectedSlug, pets: pets, preferred: preferred)
+    }
+
+    private func persistSelectionIfNeeded() {
+        guard let selectedSlug else { return }
+        do {
+            let current = try configStore.read()
+            try configStore.write(current.with(activePetID: selectedSlug))
+        } catch {
+            NSLog("VibePet failed to persist selected pet: \(error)")
+        }
+    }
+
+    private enum Step {
+        case welcome
+        case pet
+        case hooks
     }
 }

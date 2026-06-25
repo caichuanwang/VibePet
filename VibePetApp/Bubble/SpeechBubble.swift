@@ -17,9 +17,16 @@ struct SpeechBubble: View {
     let source: SourceInfo
     var tailEdge: TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
+    var onJump: (JumpTarget) -> Void = { _ in }
     var onDismiss: () -> Void = {}
 
     @State private var hovering = false
+
+    static func jumpBack(from source: SourceInfo, onJump: (JumpTarget) -> Void) {
+        if let jumpTarget = source.jumpTarget {
+            onJump(jumpTarget)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -30,6 +37,17 @@ struct SpeechBubble: View {
         .padding(tailEdge == .bottom ? .bottom : .top, BubbleTheme.tailSize.height)
         .frame(minWidth: BubbleTheme.minWidth, maxWidth: BubbleTheme.maxWidth, alignment: .leading)
         .background(bubbleBackground)
+        .contentShape(
+            BubbleShape(
+                cornerRadius: BubbleTheme.cornerRadius,
+                tailEdge: tailEdge,
+                tailOffsetX: tailOffsetX,
+                tailSize: BubbleTheme.tailSize
+            )
+        )
+        .onTapGesture(count: 2) {
+            Self.jumpBack(from: source, onJump: onJump)
+        }
         .onHover { hovering = $0 }
         .task { await runAutoDismiss() }
         .accessibilityElement(children: .combine)

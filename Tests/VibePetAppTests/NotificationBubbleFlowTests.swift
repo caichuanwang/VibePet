@@ -16,7 +16,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
         controller.greet()
 
         XCTAssertEqual(controller.state, .greet)
-        XCTAssertEqual(surface.lastActivity, .greeting)
+        XCTAssertEqual(surface.lastActivity, .waving)
     }
 
     func testGreetingIsTransientAndReturnsToIdle() async throws {
@@ -25,7 +25,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
         controller.greet()
         XCTAssertEqual(controller.state, .greet)
-        XCTAssertEqual(surface.lastActivity, .greeting)
+        XCTAssertEqual(surface.lastActivity, .waving)
 
         // Greeting has no bubble; the controller must schedule its own return to idle.
         try await waitUntil { controller.state == .idle }
@@ -47,6 +47,23 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
         XCTAssertEqual(controller.state, .idle)
         XCTAssertEqual(surface.dismissCount, 1)
+    }
+
+    func testNotificationPresentationCarriesJumpAction() {
+        let surface = FakePetSurface()
+        var jumped: [JumpTarget] = []
+        let controller = PetController(
+            surface: surface,
+            terminalJump: { jumped.append($0) }
+        )
+
+        controller.handle(completionEnvelope(
+            jumpTarget: JumpTarget(terminalApp: "Terminal", terminalTTY: "/dev/ttys001")
+        ))
+
+        XCTAssertEqual(surface.presentedBubbles.count, 1)
+        surface.presentedBubbles[0].onJump?(surface.presentedBubbles[0].source.jumpTarget!)
+        XCTAssertEqual(jumped, [JumpTarget(terminalApp: "Terminal", terminalTTY: "/dev/ttys001")])
     }
 
     func testSessionSyncDoesNotDismissVisibleNotificationBubble() {
@@ -113,7 +130,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
         try await waitUntil { host.sessionStateSnapshot.sessionsByID["session-full"] != nil }
         XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["session-full"]?.phase, .running)
-        XCTAssertEqual(surface.lastActivity, .greeting)
+        XCTAssertEqual(surface.lastActivity, .waving)
         XCTAssertTrue(surface.presentedBubbles.isEmpty, "SessionStart is state, not a user-facing bubble")
     }
 
@@ -127,7 +144,28 @@ final class NotificationBubbleFlowTests: XCTestCase {
         try await waitUntil { surface.presentedApprovals.count == 1 }
 
         XCTAssertEqual(controller.state, .decide)
-        XCTAssertEqual(surface.lastActivity, .deciding)
+        XCTAssertEqual(surface.lastActivity, .waiting)
+
+        surface.fireDecision(.approval(.allowOnce))
+        _ = await task.value
+    }
+
+    func testApprovalPresentationCarriesJumpAction() async throws {
+        let surface = FakePetSurface()
+        var jumped: [JumpTarget] = []
+        let controller = PetController(
+            surface: surface,
+            decisionTimeout: 10,
+            terminalJump: { jumped.append($0) }
+        )
+
+        let task = Task { await controller.requestDecision(for: approvalEnvelope(
+            jumpTarget: JumpTarget(terminalApp: "iTerm", terminalSessionID: "session-1")
+        )) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+
+        surface.presentedApprovals[0].onJump?(surface.presentedApprovals[0].source.jumpTarget!)
+        XCTAssertEqual(jumped, [JumpTarget(terminalApp: "iTerm", terminalSessionID: "session-1")])
 
         surface.fireDecision(.approval(.allowOnce))
         _ = await task.value
@@ -233,7 +271,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
         XCTAssertFalse(controller.greet(), "greet should not preempt decide")
         XCTAssertEqual(controller.state, .decide)
-        XCTAssertEqual(surface.lastActivity, .deciding)
+        XCTAssertEqual(surface.lastActivity, .waiting)
 
         surface.fireDecision(.approval(.allowOnce))
         _ = await task.value
@@ -311,6 +349,87 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertFalse(host.sessionStateSnapshot.visibleSessions.contains { $0.id == "session-full" })
     }
 
+    func testLivenessSweepAppliesTerminalJumpTargetResolverUpdates() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(
+            petController: controller,
+            socketPath: socketPath,
+            liveSessionProvider: { state in Set(state.sessionsByID.keys) },
+            livenessInterval: 60,
+            terminalJumpResolver: TerminalJumpTargetResolver(
+                ghosttySnapshots: {
+                    [
+                        TerminalJumpTargetResolver.GhosttySnapshot(
+                            sessionID: "ghostty-updated",
+                            workingDirectory: "/tmp/VibePet",
+                            title: "Codex"
+                        )
+                    ]
+                },
+                terminalSnapshots: { [] }
+            )
+        )
+
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        try await BridgeClient(socketPath: socketPath).sendOneWay(sessionStartEnvelope(
+            jumpTarget: JumpTarget(terminalApp: "Ghostty", workingDirectory: "/tmp/VibePet")
+        ))
+        try await waitUntil { host.sessionStateSnapshot.sessionsByID["session-full"] != nil }
+
+        await host.runLivenessSweepOnce()
+
+        let target = host.sessionStateSnapshot.sessionsByID["session-full"]?.jumpTarget
+        XCTAssertEqual(target?.terminalSessionID, "ghostty-updated")
+        XCTAssertEqual(target?.paneTitle, "Codex")
+    }
+
+    func testLivenessSweepRunsTerminalJumpResolverOffMainThread() async throws {
+        let resolverRanOnMainThread = LockedOptionalValue<Bool>()
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(
+            petController: controller,
+            liveSessionProvider: { state in Set(state.sessionsByID.keys) },
+            livenessInterval: 60,
+            terminalJumpResolver: TerminalJumpTargetResolver(
+                ghosttySnapshots: {
+                    resolverRanOnMainThread.set(Thread.isMainThread)
+                    return [
+                        TerminalJumpTargetResolver.GhosttySnapshot(
+                            sessionID: "ghostty-updated",
+                            workingDirectory: "/tmp/VibePet",
+                            title: "Codex"
+                        )
+                    ]
+                },
+                terminalSnapshots: { [] }
+            )
+        )
+
+        host.applyForTesting(.sessionStarted(
+            sessionID: "session-full",
+            timestamp: .now,
+            title: "VibePet",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: JumpTarget(terminalApp: "Ghostty", workingDirectory: "/tmp/VibePet")
+        ))
+
+        await host.runLivenessSweepOnce()
+
+        XCTAssertEqual(resolverRanOnMainThread.value, false)
+        XCTAssertEqual(
+            host.sessionStateSnapshot.sessionsByID["session-full"]?.jumpTarget?.terminalSessionID,
+            "ghostty-updated"
+        )
+    }
+
     func testProcessLivenessMatchesTTYInsteadOfToolWideCommandSubstring() {
         var state = SessionState()
         state.apply(.sessionStarted(
@@ -355,7 +474,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
         try await waitUntil { surface.presentedQuestions.count == 1 }
 
         XCTAssertEqual(controller.state, .decide)
-        XCTAssertEqual(surface.lastActivity, .deciding)
+        XCTAssertEqual(surface.lastActivity, .waiting)
         XCTAssertTrue(surface.presentedApprovals.isEmpty, "a question must present a question card, not an approval")
 
         surface.fireDecision(.question(QuestionAnswer(answers: ["Database": "SQLite"])))
@@ -378,6 +497,28 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(surface.approvalDismissCount, 1, "draining the queue dismisses the decide bubble")
     }
 
+    func testQuestionPresentationCarriesJumpActionAndSubmitStillResolves() async throws {
+        let surface = FakePetSurface()
+        var jumped: [JumpTarget] = []
+        let controller = PetController(
+            surface: surface,
+            decisionTimeout: 10,
+            terminalJump: { jumped.append($0) }
+        )
+        let target = JumpTarget(terminalApp: "Ghostty", terminalSessionID: "ghostty-1")
+
+        let task = Task { await controller.requestDecision(for: questionEnvelope(jumpTarget: target)) }
+        try await waitUntil { surface.presentedQuestions.count == 1 }
+
+        surface.presentedQuestions[0].onJump?(surface.presentedQuestions[0].source.jumpTarget!)
+        let answer = QuestionAnswer(answers: ["Database": "SQLite"])
+        surface.fireDecision(.question(answer))
+
+        let response = await task.value
+        XCTAssertEqual(jumped, [target])
+        XCTAssertEqual(response, .question(answer))
+    }
+
     func testUnansweredQuestionTimesOutToDefer() async {
         let surface = FakePetSurface()
         let controller = PetController(surface: surface, decisionTimeout: 0.05)
@@ -388,10 +529,16 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(controller.state, .idle)
     }
 
-    private func questionEnvelope() -> BridgeEnvelope {
+    private func questionEnvelope(jumpTarget: JumpTarget? = nil) -> BridgeEnvelope {
         BridgeEnvelope(
             requestId: UUID(),
-            source: SourceInfo(tool: .claudeCode, projectName: "VibePet", sessionShortId: "a1b2c3", cwd: "/tmp/VibePet"),
+            source: SourceInfo(
+                tool: .claudeCode,
+                projectName: "VibePet",
+                sessionShortId: "a1b2c3",
+                cwd: "/tmp/VibePet",
+                jumpTarget: jumpTarget
+            ),
             content: .question(QuestionContent(
                 title: "Claude 需要你确认",
                 questions: [QuestionItem(
@@ -424,10 +571,37 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(surface.approvalDismissCount, 1)
     }
 
-    private func terminalApprovalEnvelope() -> BridgeEnvelope {
+    func testTerminalApprovalCarriesJumpActionAndDeferStillResolves() async throws {
+        let surface = FakePetSurface()
+        var jumped: [JumpTarget] = []
+        let controller = PetController(
+            surface: surface,
+            decisionTimeout: 10,
+            terminalJump: { jumped.append($0) }
+        )
+        let target = JumpTarget(terminalApp: "VS Code", workingDirectory: "/tmp/VibePet")
+
+        let task = Task { await controller.requestDecision(for: terminalApprovalEnvelope(jumpTarget: target)) }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+
+        surface.presentedApprovals[0].onJump?(surface.presentedApprovals[0].source.jumpTarget!)
+        surface.fireDecision(.defer)
+
+        let response = await task.value
+        XCTAssertEqual(jumped, [target])
+        XCTAssertEqual(response, .defer)
+    }
+
+    private func terminalApprovalEnvelope(jumpTarget: JumpTarget? = nil) -> BridgeEnvelope {
         BridgeEnvelope(
             requestId: UUID(),
-            source: SourceInfo(tool: .codex, projectName: "VibePet", sessionShortId: "9f8e7d", cwd: "/tmp/VibePet"),
+            source: SourceInfo(
+                tool: .codex,
+                projectName: "VibePet",
+                sessionShortId: "9f8e7d",
+                cwd: "/tmp/VibePet",
+                jumpTarget: jumpTarget
+            ),
             content: .approval(ApprovalContent(
                 title: "需在终端处理",
                 risk: .medium,
@@ -438,10 +612,19 @@ final class NotificationBubbleFlowTests: XCTestCase {
         )
     }
 
-    private func approvalEnvelope(command: String = "swift test") -> BridgeEnvelope {
+    private func approvalEnvelope(
+        command: String = "swift test",
+        jumpTarget: JumpTarget? = nil
+    ) -> BridgeEnvelope {
         BridgeEnvelope(
             requestId: UUID(),
-            source: SourceInfo(tool: .claudeCode, projectName: "VibePet", sessionShortId: "a1b2c3", cwd: "/tmp/VibePet"),
+            source: SourceInfo(
+                tool: .claudeCode,
+                projectName: "VibePet",
+                sessionShortId: "a1b2c3",
+                cwd: "/tmp/VibePet",
+                jumpTarget: jumpTarget
+            ),
             content: .approval(ApprovalContent(
                 title: "运行命令",
                 risk: .medium,
@@ -481,7 +664,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
         try await waitUntil { store.read().tools[ToolKind.codex.rawValue]?.activationState == .trustedActive }
     }
 
-    func testCodexNotifyCompletionCanRekeyByThreadID() async throws {
+    func testCodexNotifyCompletionCanRekeyByMatchingWorkingDirectory() async throws {
         let root = try TemporaryDirectory()
         let socketPath = SocketPath(applicationSupportRoot: root.url)
         let surface = FakePetSurface()
@@ -504,6 +687,29 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-session-full"]?.summary, "Done by notify")
     }
 
+    func testCodexNotifyCompletionDoesNotRekeyWhenWorkingDirectoryIsAmbiguous() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        let client = BridgeClient(socketPath: socketPath)
+        try await client.sendOneWay(codexSessionStartEnvelope(sessionID: "codex-session-a"))
+        try await client.sendOneWay(codexSessionStartEnvelope(sessionID: "codex-session-b"))
+        try await waitUntil { host.sessionStateSnapshot.sessionsByID.count >= 2 }
+
+        try await client.sendOneWay(codexThreadCompletionEnvelope(sessionID: "notify-thread-only"))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertNil(host.sessionStateSnapshot.sessionsByID["notify-thread-only"])
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-session-a"]?.phase, .running)
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-session-b"]?.phase, .running)
+    }
+
     func testCodexNotifyCompletionCanRekeyByUniqueWorkingDirectory() async throws {
         let root = try TemporaryDirectory()
         let socketPath = SocketPath(applicationSupportRoot: root.url)
@@ -515,10 +721,10 @@ final class NotificationBubbleFlowTests: XCTestCase {
         try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
 
         let client = BridgeClient(socketPath: socketPath)
-        try await client.sendOneWay(codexSessionStartEnvelope(threadID: nil))
+        try await client.sendOneWay(codexSessionStartEnvelope(sessionID: "codex-session-full"))
         try await waitUntil { host.sessionStateSnapshot.sessionsByID["codex-session-full"] != nil }
 
-        try await client.sendOneWay(codexThreadCompletionEnvelope(threadID: "notify-thread-only"))
+        try await client.sendOneWay(codexThreadCompletionEnvelope(sessionID: "notify-thread-only"))
         try await waitUntil {
             host.sessionStateSnapshot.sessionsByID["codex-session-full"]?.phase == .completed
         }
@@ -535,10 +741,10 @@ final class NotificationBubbleFlowTests: XCTestCase {
         )
     }
 
-    private func codexSessionStartEnvelope(threadID: String? = "codex-thread-1") -> BridgeEnvelope {
-        let jumpTarget = JumpTarget(terminalApp: "Codex", workingDirectory: "/tmp/VibePet", codexThreadID: threadID)
+    private func codexSessionStartEnvelope(sessionID: String = "codex-session-full") -> BridgeEnvelope {
+        let jumpTarget = JumpTarget(terminalApp: "Unknown", workingDirectory: "/tmp/VibePet")
         let event = AgentEvent.sessionStarted(
-            sessionID: "codex-session-full",
+            sessionID: sessionID,
             timestamp: Date(),
             title: "VibePet",
             tool: .codex,
@@ -550,7 +756,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
             source: SourceInfo(
                 tool: .codex,
                 projectName: "VibePet",
-                sessionID: "codex-session-full",
+                sessionID: sessionID,
                 sessionShortId: "codex-",
                 cwd: "/tmp/VibePet",
                 jumpTarget: jumpTarget
@@ -560,21 +766,21 @@ final class NotificationBubbleFlowTests: XCTestCase {
         )
     }
 
-    private func codexThreadCompletionEnvelope(threadID: String = "codex-thread-1") -> BridgeEnvelope {
-        let jumpTarget = JumpTarget(terminalApp: "Codex", workingDirectory: "/tmp/VibePet", codexThreadID: threadID)
+    private func codexThreadCompletionEnvelope(sessionID: String = "notify-thread-only") -> BridgeEnvelope {
+        let jumpTarget = JumpTarget(terminalApp: "Unknown", workingDirectory: "/tmp/VibePet")
         return BridgeEnvelope(
             requestId: UUID(),
             source: SourceInfo(
                 tool: .codex,
                 projectName: "VibePet",
-                sessionID: threadID,
+                sessionID: sessionID,
                 sessionShortId: "codex-",
                 cwd: "/tmp/VibePet",
                 jumpTarget: jumpTarget
             ),
             content: .completion(CompletionContent(markdownSummary: "Done by notify", isError: false)),
             agentEvent: .sessionCompleted(
-                sessionID: threadID,
+                sessionID: sessionID,
                 timestamp: Date(),
                 summary: "Done by notify",
                 isError: false,
@@ -585,22 +791,28 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func completionEnvelope() -> BridgeEnvelope {
+    private func completionEnvelope(jumpTarget: JumpTarget? = nil) -> BridgeEnvelope {
         BridgeEnvelope(
             requestId: UUID(),
-            source: SourceInfo(tool: .claudeCode, projectName: "VibePet", sessionShortId: "a1b2c3", cwd: "/tmp/VibePet"),
+            source: SourceInfo(
+                tool: .claudeCode,
+                projectName: "VibePet",
+                sessionShortId: "a1b2c3",
+                cwd: "/tmp/VibePet",
+                jumpTarget: jumpTarget
+            ),
             content: .completion(CompletionContent(markdownSummary: "新增 3 个测试，全部通过", isError: false))
         )
     }
 
-    private func sessionStartEnvelope() -> BridgeEnvelope {
+    private func sessionStartEnvelope(jumpTarget: JumpTarget? = nil) -> BridgeEnvelope {
         let event = AgentEvent.sessionStarted(
             sessionID: "session-full",
             timestamp: Date(),
             title: "VibePet",
             tool: .claudeCode,
             summary: "Started",
-            jumpTarget: nil
+            jumpTarget: jumpTarget
         )
         return BridgeEnvelope(
             requestId: UUID(),
@@ -609,7 +821,8 @@ final class NotificationBubbleFlowTests: XCTestCase {
                 projectName: "VibePet",
                 sessionID: "session-full",
                 sessionShortId: "sessio",
-                cwd: "/tmp/VibePet"
+                cwd: "/tmp/VibePet",
+                jumpTarget: jumpTarget
             ),
             content: .status(StatusContent(text: "Started")),
             agentEvent: event
@@ -632,6 +845,7 @@ private final class FakePetSurface: PetSurface {
         let content: BubbleContent
         let source: SourceInfo
         let placement: BubbleAnchor.Placement
+        let onJump: ((JumpTarget) -> Void)?
     }
 
     struct PresentedApproval {
@@ -639,6 +853,7 @@ private final class FakePetSurface: PetSurface {
         let source: SourceInfo
         let timeout: TimeInterval
         let pendingCount: Int
+        let onJump: ((JumpTarget) -> Void)?
     }
 
     struct PresentedQuestion {
@@ -646,6 +861,7 @@ private final class FakePetSurface: PetSurface {
         let source: SourceInfo
         let timeout: TimeInterval
         let pendingCount: Int
+        let onJump: ((JumpTarget) -> Void)?
     }
 
     var petFrame: CGRect? = CGRect(x: 800, y: 0, width: 120, height: 120)
@@ -670,9 +886,15 @@ private final class FakePetSurface: PetSurface {
         content: BubbleContent,
         source: SourceInfo,
         placement: BubbleAnchor.Placement,
+        onJump: @escaping (JumpTarget) -> Void,
         onDismiss: @escaping () -> Void
     ) {
-        presentedBubbles.append(PresentedBubble(content: content, source: source, placement: placement))
+        presentedBubbles.append(PresentedBubble(
+            content: content,
+            source: source,
+            placement: placement,
+            onJump: onJump
+        ))
         self.onDismiss = onDismiss
     }
 
@@ -690,10 +912,17 @@ private final class FakePetSurface: PetSurface {
         placement: BubbleAnchor.Placement,
         timeout: TimeInterval,
         pendingCount: Int,
+        onJump: @escaping (JumpTarget) -> Void,
         onDecision: @escaping (BridgeResponse) -> Void
     ) {
         presentedApprovals.append(
-            PresentedApproval(content: content, source: source, timeout: timeout, pendingCount: pendingCount)
+            PresentedApproval(
+                content: content,
+                source: source,
+                timeout: timeout,
+                pendingCount: pendingCount,
+                onJump: onJump
+            )
         )
         lastPendingCount = pendingCount
         self.onDecision = onDecision
@@ -705,10 +934,17 @@ private final class FakePetSurface: PetSurface {
         placement: BubbleAnchor.Placement,
         timeout: TimeInterval,
         pendingCount: Int,
+        onJump: @escaping (JumpTarget) -> Void,
         onAnswer: @escaping (BridgeResponse) -> Void
     ) {
         presentedQuestions.append(
-            PresentedQuestion(content: content, source: source, timeout: timeout, pendingCount: pendingCount)
+            PresentedQuestion(
+                content: content,
+                source: source,
+                timeout: timeout,
+                pendingCount: pendingCount,
+                onJump: onJump
+            )
         )
         lastPendingCount = pendingCount
         self.onDecision = onAnswer
@@ -744,5 +980,20 @@ private final class TemporaryDirectory {
 
     deinit {
         try? FileManager.default.removeItem(at: url)
+    }
+}
+
+private final class LockedOptionalValue<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value?
+
+    var value: Value? {
+        lock.withLock { storage }
+    }
+
+    func set(_ value: Value) {
+        lock.withLock {
+            storage = value
+        }
     }
 }

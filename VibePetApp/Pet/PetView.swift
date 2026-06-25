@@ -1,139 +1,137 @@
 import SwiftUI
 import VibePetCore
 
-/// The desktop pet itself: renders the active `PetAsset` sprite with transparency
-/// preserved and plays the idle / greeting animations (technical design §2.1, §5.2).
 struct PetView: View {
     let asset: PetAsset?
     var activity: PetActivity = .idle
+    var onFrameChanged: ((CGImage?) -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    @State private var sprite: CGImage?
-    @State private var blinkLayer: CGImage?
-    @State private var isBreathing = false
-    @State private var isSwaying = false
-    @State private var blinkOn = false
-    @State private var isGreeting = false
-
-    private let blinkTimer = Timer.publish(every: PetAnimations.blinkInterval, on: .main, in: .common).autoconnect()
+    @State private var grid: SpriteSheetGrid?
 
     var body: some View {
         Group {
-            if let sprite {
-                spriteBody(sprite)
+            if let asset, let grid {
+                SpriteSheetAnimator(
+                    asset: asset,
+                    grid: grid,
+                    activity: activity,
+                    reduceMotion: reduceMotion,
+                    onFrameChanged: onFrameChanged
+                )
             } else {
                 PlaceholderPet()
+                    .onAppear { onFrameChanged?(Self.emptyHitFrame) }
             }
         }
-        .frame(width: PetView.spriteSide, height: PetView.spriteSide)
-        .onAppear {
-            loadImages()
-            startIdle()
-            if activity == .greeting { playGreeting() }
+        .frame(width: Self.spriteSide, height: Self.spriteSide)
+        .task(id: asset?.spritesheetURL) {
+            loadSpritesheet()
         }
-        .onChange(of: asset) { _, _ in loadImages() }
-        .onChange(of: activity) { _, newValue in
-            if newValue == .greeting { playGreeting() }
-        }
-        .onReceive(blinkTimer) { _ in pulseBlink() }
     }
 
     static let spriteSide: CGFloat = 120
 
-    // MARK: - Body rendering
-
-    private func spriteBody(_ image: CGImage) -> some View {
-        ZStack {
-            Image(decorative: image, scale: 1)
-                .resizable()
-                .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
-
-            if let blinkLayer, blinkOn {
-                Image(decorative: blinkLayer, scale: 1)
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
+    fileprivate static let emptyHitFrame: CGImage? = {
+        var pixel: UInt8 = 0
+        return withUnsafeMutableBytes(of: &pixel) { raw in
+            guard let context = CGContext(
+                data: raw.baseAddress,
+                width: 1,
+                height: 1,
+                bitsPerComponent: 8,
+                bytesPerRow: 1,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else {
+                return nil
             }
+            return context.makeImage()
         }
-        .scaleEffect(currentScale, anchor: .bottom)
-        .rotationEffect(currentRotation, anchor: .bottom)
-        .offset(y: isGreeting && !reduceMotion ? PetAnimations.greetLift : 0)
-        .opacity(currentOpacity)
-    }
+    }()
 
-    // MARK: - Animation state
-
-    private var currentScale: CGSize {
-        guard !reduceMotion, isBreathing else { return CGSize(width: 1, height: 1) }
-        return PetAnimations.breathingScale
-    }
-
-    private var currentRotation: Angle {
-        guard !reduceMotion, isSwaying else { return .zero }
-        return PetAnimations.swayAngle
-    }
-
-    /// With Reduce Motion on we replace bouncing/spring with a gentle fade
-    /// (technical design §5.3 通用): a slow opacity pulse stands in for "alive".
-    private var currentOpacity: Double {
-        guard reduceMotion else { return 1 }
-        return isBreathing ? 0.85 : 1
-    }
-
-    private func startIdle() {
-        withAnimation(PetAnimations.idleBreathing(reduceMotion: reduceMotion)) {
-            isBreathing = true
-        }
-        withAnimation(PetAnimations.idleSway(reduceMotion: reduceMotion)) {
-            isSwaying = true
-        }
-    }
-
-    private func playGreeting() {
-        withAnimation(PetAnimations.greeting(reduceMotion: reduceMotion)) {
-            isGreeting = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + PetAnimations.greetDuration) {
-            withAnimation(PetAnimations.greeting(reduceMotion: reduceMotion)) {
-                isGreeting = false
-            }
-        }
-    }
-
-    private func pulseBlink() {
-        // Only blink when the asset actually supplied a blink layer (technical
-        // design §2.1 末); otherwise standby renders the base sprite untouched.
-        guard blinkLayer != nil, !reduceMotion else { return }
-        withAnimation(.easeInOut(duration: PetAnimations.blinkDuration)) { blinkOn = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + PetAnimations.blinkDuration) {
-            withAnimation(.easeInOut(duration: PetAnimations.blinkDuration)) { blinkOn = false }
-        }
-    }
-
-    // MARK: - Image loading
-
-    private func loadImages() {
-        guard let asset else {
-            sprite = nil
-            blinkLayer = nil
+    private func loadSpritesheet() {
+        guard let asset, let image = ImageLoading.cgImage(at: asset.spritesheetURL) else {
+            grid = nil
+            onFrameChanged?(Self.emptyHitFrame)
             return
         }
-        sprite = ImageLoading.cgImage(at: asset.primaryImageURL)
-        if let blink = asset.layers.first(where: { $0.id == "blink" }) {
-            blinkLayer = ImageLoading.cgImage(at: blink.imageURL)
-        } else {
-            blinkLayer = nil
+        grid = try? SpriteSheetGrid(cgImage: image)
+        if grid == nil {
+            onFrameChanged?(Self.emptyHitFrame)
         }
     }
 }
 
-/// Shown before any pet exists (e.g. during onboarding placeholder states).
+private struct SpriteSheetAnimator: View {
+    let asset: PetAsset
+    let grid: SpriteSheetGrid
+    let activity: PetActivity
+    let reduceMotion: Bool
+    var onFrameChanged: ((CGImage?) -> Void)?
+
+    @State private var frameIndex = 0
+
+    private var state: PetVisualState {
+        activity.visualState
+    }
+
+    private var spec: SpriteAnimationSpec {
+        grid.playbackSpec(for: state, asset: asset) ?? SpriteAnimationSpec(row: 0, durationsMs: [280])
+    }
+
+    var body: some View {
+        Group {
+            if let frame = currentFrame {
+                Image(decorative: frame, scale: 1)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .onAppear { onFrameChanged?(frame) }
+                    .onChange(of: frameIndex) { _, _ in onFrameChanged?(currentFrame) }
+            } else {
+                PlaceholderPet()
+                    .onAppear { onFrameChanged?(PetView.emptyHitFrame) }
+            }
+        }
+        .task(id: animationTaskID) {
+            await runAnimationLoop()
+        }
+    }
+
+    private var animationTaskID: String {
+        let durations = spec.durationsMs.map(String.init).joined(separator: ":")
+        return "\(asset.slug)-\(state.rawValue)-\(reduceMotion)-\(durations)"
+    }
+
+    private var currentFrame: CGImage? {
+        let column = reduceMotion ? 0 : frameIndex % max(1, spec.effectiveColumnCount)
+        return grid.frame(row: spec.row, column: column)
+    }
+
+    private func runAnimationLoop() async {
+        frameIndex = 0
+        onFrameChanged?(currentFrame)
+        guard !reduceMotion, !spec.durationsMs.isEmpty else {
+            return
+        }
+        while !Task.isCancelled {
+            let duration = spec.durationsMs[frameIndex % spec.durationsMs.count]
+            try? await Task.sleep(nanoseconds: UInt64(duration) * 1_000_000)
+            guard !Task.isCancelled else { return }
+            frameIndex = (frameIndex + 1) % spec.durationsMs.count
+        }
+    }
+}
+
 private struct PlaceholderPet: View {
     var body: some View {
-        Circle()
-            .fill(Color.accentColor.opacity(0.25))
-            .overlay(Text("🐾").font(.system(size: 44)))
+        VStack(spacing: 8) {
+            Image(systemName: "pawprint.fill")
+                .font(.system(size: 36))
+            Text("选择宠物")
+                .font(.caption2)
+        }
+        .foregroundStyle(.secondary)
     }
 }

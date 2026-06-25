@@ -9,6 +9,8 @@ import VibePetCore
 /// decision show a small count badge on the pet.
 @MainActor
 final class PetWindowSurface: PetSurface {
+    static let bubbleOverlayCollectionBehavior = PetWindow.overlayCollectionBehavior
+
     private weak var windowController: PetWindowController?
     private var isPetVisible = false
     private var bubbleWindow: NSWindow?
@@ -36,14 +38,19 @@ final class PetWindowSurface: PetSurface {
 
     func renderPet(asset: PetAsset?, activity: PetActivity) {
         guard let windowController else { return }
-        windowController.setContent(PetView(asset: asset, activity: activity))
-        windowController.setHitSprite(asset.flatMap { ImageLoading.cgImage(at: $0.primaryImageURL) })
+        windowController.setContent(PetView(asset: asset, activity: activity) { [weak windowController] frame in
+            windowController?.setHitSprite(frame)
+        })
+        if asset == nil {
+            windowController.setHitSprite(nil)
+        }
     }
 
     func presentBubble(
         content: BubbleContent,
         source: SourceInfo,
         placement: BubbleAnchor.Placement,
+        onJump: @escaping (JumpTarget) -> Void,
         onDismiss: @escaping () -> Void
     ) {
         let tailEdge: SpeechBubble.TailEdge = placement.vertical == .up ? .bottom : .top
@@ -56,6 +63,7 @@ final class PetWindowSurface: PetSurface {
             source: source,
             tailEdge: tailEdge,
             tailOffsetX: tailOffsetX,
+            onJump: onJump,
             onDismiss: onDismiss
         )
 
@@ -79,6 +87,7 @@ final class PetWindowSurface: PetSurface {
         placement: BubbleAnchor.Placement,
         timeout: TimeInterval,
         pendingCount: Int,
+        onJump: @escaping (JumpTarget) -> Void,
         onDecision: @escaping (BridgeResponse) -> Void
     ) {
         dismissBubble()
@@ -98,6 +107,7 @@ final class PetWindowSurface: PetSurface {
                 tailOffsetX: 0,
                 timeout: timeout,
                 presentation: presentation,
+                onJump: onJump,
                 onDecision: { _ in }
             )
         )
@@ -121,6 +131,7 @@ final class PetWindowSurface: PetSurface {
                 tailOffsetX: tailOffsetX,
                 timeout: timeout,
                 presentation: presentation,
+                onJump: onJump,
                 onDecision: onDecision
             )
         }
@@ -141,6 +152,7 @@ final class PetWindowSurface: PetSurface {
         placement: BubbleAnchor.Placement,
         timeout: TimeInterval,
         pendingCount: Int,
+        onJump: @escaping (JumpTarget) -> Void,
         onAnswer: @escaping (BridgeResponse) -> Void
     ) {
         dismissBubble()
@@ -158,6 +170,7 @@ final class PetWindowSurface: PetSurface {
                 tailOffsetX: 0,
                 timeout: timeout,
                 presentation: presentation,
+                onJump: onJump,
                 onAnswer: { _ in }
             )
         )
@@ -180,6 +193,7 @@ final class PetWindowSurface: PetSurface {
                 tailOffsetX: tailOffsetX,
                 timeout: timeout,
                 presentation: presentation,
+                onJump: onJump,
                 onAnswer: onAnswer
             )
         }
@@ -274,7 +288,7 @@ private final class BubbleWindow: NSWindow {
         backgroundColor = .clear
         level = .floating
         hasShadow = true
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        collectionBehavior = PetWindowSurface.bubbleOverlayCollectionBehavior
         isReleasedWhenClosed = false
     }
 

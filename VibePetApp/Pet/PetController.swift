@@ -14,6 +14,7 @@ import VibePetCore
 final class PetController {
     private var machine = PetStateMachine()
     private let surface: PetSurface
+    private let terminalJump: (JumpTarget) -> Void
     private var activeAsset: PetAsset?
 
     /// How long the greeting state lasts before auto-returning to idle. Mirrors the
@@ -43,11 +44,15 @@ final class PetController {
     init(
         surface: PetSurface,
         greetDuration: TimeInterval = PetAnimations.greetDuration,
-        decisionTimeout: TimeInterval = AppConfig.default.decisionTimeoutSeconds
+        decisionTimeout: TimeInterval = AppConfig.default.decisionTimeoutSeconds,
+        terminalJump: @escaping (JumpTarget) -> Void = { target in
+            try? TerminalJumpService().jump(to: target)
+        }
     ) {
         self.surface = surface
         self.greetDuration = greetDuration
         self.decisionTimeout = decisionTimeout
+        self.terminalJump = terminalJump
     }
 
     /// Updates the active pet sprite and re-renders the current state.
@@ -110,6 +115,7 @@ final class PetController {
             content: envelope.content,
             source: envelope.source,
             placement: placement,
+            onJump: terminalJump,
             onDismiss: { [weak self] in self?.handleBubbleDismissed() }
         )
     }
@@ -126,7 +132,7 @@ final class PetController {
                 machine.bubbleDismissed()
             }
         }
-        render()
+        surface.renderPet(asset: activeAsset, activity: activity(for: sessionState.petVisualState))
     }
 
     /// Presents an approval bubble and suspends until the user decides (or the
@@ -204,6 +210,7 @@ final class PetController {
                 placement: placement,
                 timeout: decisionTimeout,
                 pendingCount: decisions.pendingCount,
+                onJump: terminalJump,
                 onDecision: onDecision
             )
         case let .question(question):
@@ -213,6 +220,7 @@ final class PetController {
                 placement: placement,
                 timeout: decisionTimeout,
                 pendingCount: decisions.pendingCount,
+                onJump: terminalJump,
                 onAnswer: onDecision
             )
         case .completion, .status:
@@ -275,13 +283,23 @@ final class PetController {
     private func activity(for state: PetStateMachine.State) -> PetActivity {
         switch state {
         case .greet:
-            return .greeting
+            return .waving
         case .decide:
             // Highlight the pet for attention while an approval awaits a decision.
-            return .deciding
+            return .waiting
         case .idle, .notify:
             // notify keeps the resting sprite; the bubble carries the notification.
             return .idle
+        }
+    }
+
+    private func activity(for state: PetVisualState) -> PetActivity {
+        switch state {
+        case .idle: .idle
+        case .running: .running
+        case .waiting: .waiting
+        case .waving: .waving
+        case .failed: .failed
         }
     }
 
@@ -313,6 +331,7 @@ protocol PetSurface: AnyObject {
         content: BubbleContent,
         source: SourceInfo,
         placement: BubbleAnchor.Placement,
+        onJump: @escaping (JumpTarget) -> Void,
         onDismiss: @escaping () -> Void
     )
     func dismissBubble()
@@ -324,6 +343,7 @@ protocol PetSurface: AnyObject {
         placement: BubbleAnchor.Placement,
         timeout: TimeInterval,
         pendingCount: Int,
+        onJump: @escaping (JumpTarget) -> Void,
         onDecision: @escaping (BridgeResponse) -> Void
     )
     /// Presents an interactive structured-question card. `onAnswer` is invoked
@@ -335,6 +355,7 @@ protocol PetSurface: AnyObject {
         placement: BubbleAnchor.Placement,
         timeout: TimeInterval,
         pendingCount: Int,
+        onJump: @escaping (JumpTarget) -> Void,
         onAnswer: @escaping (BridgeResponse) -> Void
     )
     /// Updates the "还有 N 个待处理" badge while the front card stays presented.

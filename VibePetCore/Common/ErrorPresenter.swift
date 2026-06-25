@@ -13,33 +13,19 @@ public struct PresentedError: Equatable, Sendable {
     }
 }
 
-/// Maps generation, install, and trust conditions to user-facing copy per the
+/// Maps import, install, and trust conditions to user-facing copy per the
 /// technical design §7 error table. Pure: no AppKit/SwiftUI, so it lives in
 /// `VibePetCore` and is shared across the App's surfaces.
 public enum ErrorPresenter {
-    /// Generation failures (e.g. cutout produced no subject).
-    public static func present(generationError error: GenError) -> PresentedError {
+    public static func present(petAssetError error: PetAssetError) -> PresentedError {
         switch error {
-        case .noSubject:
+        case let .invalidPackage(reason):
             return PresentedError(
-                message: "没有在照片里找到清晰的主体。",
-                suggestedAction: "换一张主体更清楚的照片，或重试。"
-            )
-        case .encodingFailed:
-            return PresentedError(
-                message: "生成精灵图失败（图像编码出错）。",
-                suggestedAction: "换一张照片重试。"
+                message: "这个 Codex 宠物包无法导入：\(reason)",
+                suggestedAction: "请拖入包含 pet.json 和 1536x1872 spritesheet 的 Codex 宠物 zip 或文件夹。"
             )
         case let .writeFailed(reason):
-            return PresentedError(
-                message: "保存宠物素材失败：\(reason)",
-                suggestedAction: "检查磁盘空间后重试。"
-            )
-        case let .defaultGeneratorUnavailable(reason):
-            return PresentedError(
-                message: "生成器不可用：\(reason)",
-                suggestedAction: nil
-            )
+            return PresentedError(message: "保存宠物失败：\(reason)", suggestedAction: "检查磁盘空间后重试。")
         }
     }
 

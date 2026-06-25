@@ -110,6 +110,54 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
         XCTAssertEqual(envelope.source.cwd, "/Users/dev/Projects/VibePet")
     }
 
+    func testSourceInfoCarriesHookCapturedJumpTarget() throws {
+        let adapter = ClaudeCodeAdapter(
+            transcriptSummaryReader: { _ in nil },
+            terminalJumpCapture: TerminalJumpCapture(
+                currentTTYProvider: { "/dev/ttys001" },
+                terminalLocator: { app in
+                    XCTAssertEqual(app, "Terminal")
+                    return TerminalJumpCapture.LocatorSnapshot(
+                        sessionID: nil,
+                        tty: "/dev/ttys111",
+                        title: "Claude"
+                    )
+                }
+            )
+        )
+
+        let envelope = try XCTUnwrap(adapter.parseEvent(
+            stdin: fixture("stop.json"),
+            env: ["TERM_PROGRAM": "Apple_Terminal"]
+        ))
+
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalApp, "Terminal")
+        XCTAssertEqual(envelope.source.jumpTarget?.workspaceName, "VibePet")
+        XCTAssertEqual(envelope.source.jumpTarget?.workingDirectory, "/Users/dev/Projects/VibePet")
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalTTY, "/dev/ttys111")
+        XCTAssertEqual(envelope.source.jumpTarget?.paneTitle, "Claude")
+    }
+
+    func testJumpTargetCaptureFailureKeepsEnvelopeFailOpen() throws {
+        let adapter = ClaudeCodeAdapter(
+            transcriptSummaryReader: { _ in nil },
+            terminalJumpCapture: TerminalJumpCapture(
+                currentTTYProvider: { nil },
+                terminalLocator: { _ in nil }
+            )
+        )
+
+        let envelope = try XCTUnwrap(adapter.parseEvent(
+            stdin: fixture("stop.json"),
+            env: ["TERM_PROGRAM": "iTerm.app"]
+        ))
+
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalApp, "iTerm")
+        XCTAssertEqual(envelope.source.jumpTarget?.workingDirectory, "/Users/dev/Projects/VibePet")
+        XCTAssertNil(envelope.source.jumpTarget?.terminalSessionID)
+        XCTAssertNil(envelope.source.jumpTarget?.terminalTTY)
+    }
+
     // MARK: - Lifecycle AgentEvent
 
     func testSessionStartBecomesAgentEvent() throws {

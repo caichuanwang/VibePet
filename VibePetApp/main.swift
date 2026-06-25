@@ -86,11 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let activeID = (try? configStore.read())?.activePetID
         let assets = (try? assetStore.list()) ?? []
         return assets.map { asset in
-            let name = asset.metadata["name"].flatMap { $0.isEmpty ? nil : $0 }
             return PetMenuEntry(
-                id: asset.id.uuidString,
-                title: name ?? String(asset.id.uuidString.prefix(8)),
-                isActive: asset.id.uuidString == activeID
+                id: asset.slug,
+                title: asset.displayName,
+                isActive: asset.slug == activeID
             )
         }
     }
@@ -151,10 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func activeAsset(config: AppConfig) -> PetAsset? {
-        guard let idString = config.activePetID, let id = UUID(uuidString: idString) else {
+        guard let slug = config.activePetID else {
             return nil
         }
-        return (try? assetStore.read(id: id)) ?? nil
+        return (try? assetStore.read(slug: slug)) ?? nil
     }
 
     // MARK: - Onboarding
@@ -187,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.importWindow = nil
             self?.refreshPet()
         }
-        let window = makeHostingWindow(title: "导入新照片", view: PetImportPanel(viewModel: viewModel))
+        let window = makeHostingWindow(title: "导入宠物", view: PetImportPanel(viewModel: viewModel))
         importWindow = window
         window.makeKeyAndOrderFront(nil)
     }

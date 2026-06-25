@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the app settings page: per-tool hook enablement and install controls, and runtime preferences (decision timeout, launch-at-login, generator selection).
+Define the app settings page: per-tool hook enablement and install controls, runtime preferences, and pet switching/import.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ Define the app settings page: per-tool hook enablement and install controls, and
 
 ### Requirement: Settings page exposes runtime preferences
 
-The settings page SHALL let the user configure the decision timeout, launch-at-login, and generator selection (MVP: local generator only), persisting them via `app-configuration`.
+The settings page SHALL let the user configure the decision timeout, launch-at-login, and active Codex pet selection, persisting them via `app-configuration`. It SHALL provide an import action for Codex pet zip files and folders.
 
 #### Scenario: Decision timeout persists
 
@@ -39,7 +39,12 @@ The settings page SHALL let the user configure the decision timeout, launch-at-l
 - **WHEN** the user toggles launch-at-login
 - **THEN** the preference is persisted and reflected on next launch
 
-#### Scenario: Generator selection limited to local in MVP
+#### Scenario: Pet selection persists
 
-- **WHEN** the user opens generator selection
-- **THEN** only the local generator is offered and selectable
+- **WHEN** the user selects a pet in settings
+- **THEN** `config.activePetID` is updated to that pet slug and the desktop pet refreshes
+
+#### Scenario: Import action is available
+
+- **WHEN** the user opens settings
+- **THEN** an import pet action is available for zip files and folders

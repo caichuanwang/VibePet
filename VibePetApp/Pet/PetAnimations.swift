@@ -1,52 +1,24 @@
-import SwiftUI
+import Foundation
+import VibePetCore
 
-/// What the pet is currently doing (technical design §5.2). `deciding` highlights
-/// the pet for attention while an approval bubble awaits a user decision (M4).
 enum PetActivity: Equatable, Sendable {
     case idle
-    case greeting
-    case deciding
+    case running
+    case waiting
+    case waving
+    case failed
+
+    var visualState: PetVisualState {
+        switch self {
+        case .idle: .idle
+        case .running: .running
+        case .waiting: .waiting
+        case .waving: .waving
+        case .failed: .failed
+        }
+    }
 }
 
-/// Centralised animation tuning so motion stays consistent and easy to retheme.
-/// Standby motion is AI-free Core Animation on the single sprite (technical
-/// design §2.1 末): squash/stretch breathing + a slight sway.
 enum PetAnimations {
-    // Breathing (squash/stretch).
-    static let breathingScale: CGSize = CGSize(width: 1.04, height: 0.97)
-    static let breathingDuration: Double = 2.2
-
-    // Sway (slight rotation).
-    static let swayAngle: Angle = .degrees(2.2)
-    static let swayDuration: Double = 3.1
-
-    // Blink overlay cadence.
-    static let blinkInterval: Double = 4.0
-    static let blinkDuration: Double = 0.12
-
-    // Greeting bounce.
-    static let greetLift: CGFloat = -10
-    static let greetDuration: Double = 0.45
-
-    // Reduce Motion fallback.
-    static let fadeDuration: Double = 0.35
-
-    /// Repeating idle animation, or a plain fade when Reduce Motion is on.
-    static func idleBreathing(reduceMotion: Bool) -> Animation {
-        reduceMotion
-            ? .easeInOut(duration: fadeDuration)
-            : .easeInOut(duration: breathingDuration).repeatForever(autoreverses: true)
-    }
-
-    static func idleSway(reduceMotion: Bool) -> Animation {
-        reduceMotion
-            ? .easeInOut(duration: fadeDuration)
-            : .easeInOut(duration: swayDuration).repeatForever(autoreverses: true)
-    }
-
-    static func greeting(reduceMotion: Bool) -> Animation {
-        reduceMotion
-            ? .easeInOut(duration: fadeDuration)
-            : .interpolatingSpring(stiffness: 220, damping: 9)
-    }
+    static let greetDuration: Double = 0.56
 }

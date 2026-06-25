@@ -8,6 +8,7 @@ import XCTest
 /// handles it in the tool's native terminal). The header + `ActionPreview` body
 /// still render — only the footer mode changes. SwiftUI rendering is verified by
 /// manual demo; here we assert the pure footer-mode decision and the resolve value.
+@MainActor
 final class ApprovalCardTests: XCTestCase {
     func testFooterModeIsTerminalWhenRequiresTerminalApproval() {
         XCTAssertEqual(ApprovalCard.footerMode(for: approval(requiresTerminal: true)), .terminal)

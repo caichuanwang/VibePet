@@ -16,6 +16,7 @@ struct QuestionCard: View {
     var tailEdge: SpeechBubble.TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
     let timeout: TimeInterval
+    var onJump: (JumpTarget) -> Void = { _ in }
     var onAnswer: (BridgeResponse) -> Void = { _ in }
 
     @ObservedObject var presentation: ApprovalPresentation
@@ -26,6 +27,12 @@ struct QuestionCard: View {
     /// header → free-text entered for a selected `allowsFreeform` option.
     @State private var freeformText: [String: String] = [:]
 
+    static func jumpBack(from source: SourceInfo, onJump: (JumpTarget) -> Void) {
+        if let jumpTarget = source.jumpTarget {
+            onJump(jumpTarget)
+        }
+    }
+
     init(
         content: QuestionContent,
         source: SourceInfo,
@@ -33,6 +40,7 @@ struct QuestionCard: View {
         tailOffsetX: CGFloat = 40,
         timeout: TimeInterval,
         presentation: ApprovalPresentation,
+        onJump: @escaping (JumpTarget) -> Void = { _ in },
         onAnswer: @escaping (BridgeResponse) -> Void = { _ in }
     ) {
         self.content = content
@@ -41,6 +49,7 @@ struct QuestionCard: View {
         self.tailOffsetX = tailOffsetX
         self.timeout = timeout
         self.presentation = presentation
+        self.onJump = onJump
         self.onAnswer = onAnswer
         _remaining = State(initialValue: timeout)
     }
@@ -55,6 +64,17 @@ struct QuestionCard: View {
         .padding(tailEdge == .bottom ? .bottom : .top, BubbleTheme.tailSize.height)
         .frame(minWidth: BubbleTheme.minWidth, maxWidth: BubbleTheme.maxWidth, alignment: .leading)
         .background(bubbleBackground)
+        .contentShape(
+            BubbleShape(
+                cornerRadius: BubbleTheme.cornerRadius,
+                tailEdge: tailEdge,
+                tailOffsetX: tailOffsetX,
+                tailSize: BubbleTheme.tailSize
+            )
+        )
+        .onTapGesture(count: 2) {
+            Self.jumpBack(from: source, onJump: onJump)
+        }
         .task { await runCountdown() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(sourceLabel)：\(content.title)")

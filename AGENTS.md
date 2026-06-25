@@ -49,8 +49,8 @@ To make VibePet behave like a fresh first launch, clear the app's persisted stat
 
 - Keep `VibePetCore/` UI-independent. Do not import `AppKit` or `SwiftUI` there; UI belongs in `VibePetApp/`. System side effects needed by Core logic (osascript, etc.) must be exposed through injectable closures so unit tests don't touch the real system.
 - Preserve fail-open behavior for hooks and bridge code. If the app is not running, the socket fails, input is malformed, or a timeout occurs, Claude Code and Codex must fall back to their native flow instead of hanging. This is a red line that must not regress in any version.
-- Keep the project local-first. Do not add network generation, telemetry, or upload paths without an explicit product change and user authorization design.
-- When changing `PetAssetStore`, bridge serialization, adapters, or the installer, run `swift test`.
+- Keep the project local-first. VibePet is a Codex pet host: do not add network generation, telemetry, upload paths, or in-app pet gallery installs without an explicit product change and user authorization design.
+- When changing `SpriteSheetAnimator`, `PetAssetStore`, bridge serialization, adapters, or the installer, run `swift test`.
 - Hook installation must point tool configuration at a stable copy such as `~/Library/Application Support/VibePet/bin/VibePetHooks`, not a path inside the `.app` bundle. That stable path contains a space and runs via `/bin/sh -c`, so config writers must single-quote the hook command path.
 - VibePet plans to ship on the **Mac App Store** with **one-time (buyout) pricing** — no subscription, no account/server (consistent with the local-first guardrail). Be aware this conflicts with App Store **sandboxing**: writing `~/.codex`/`~/.claude`, the Unix socket, and osascript terminal jump-back all live outside the sandbox. Distribution may require sandbox-exception entitlements / App Group container paths, or fall back to Developer ID notarized direct distribution. Do not silently break the stable-path / fail-open / local-first constraints to accommodate this; flag the tradeoff instead.
 
