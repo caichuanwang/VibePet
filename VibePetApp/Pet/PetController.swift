@@ -330,6 +330,17 @@ final class PetController {
         render()
     }
 
+    private func dismissNotificationBubbleIfActive() {
+        guard activeNotificationSessionID != nil else {
+            return
+        }
+        activeNotificationSessionID = nil
+        activeNotificationSource = nil
+        machine.bubbleDismissed()
+        surface.dismissBubble()
+        render()
+    }
+
     private func dismissNotificationBubbleIfActive(matching source: SourceInfo) {
         guard activeNotificationSessionID == source.sessionID else {
             return
@@ -458,9 +469,9 @@ final class PetController {
     func dashboardSelectionChanged(sessionID: String?, jumpTarget: JumpTarget? = nil) {
         surface.selectedDashboardSessionID = sessionID
         surface.selectedDashboardJumpTarget = sessionID == nil ? nil : jumpTarget
-        dismissNotificationBubbleIfActive(
-            matching: DashboardSessionSelection(sessionID: sessionID, jumpTarget: jumpTarget)
-        )
+        if sessionID != nil {
+            dismissNotificationBubbleIfActive()
+        }
         presentFrontDecision()
     }
 

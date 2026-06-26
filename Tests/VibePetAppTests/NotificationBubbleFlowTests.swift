@@ -90,6 +90,18 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(surface.dismissCount, 1)
     }
 
+    func testSelectingDashboardSessionDismissesUnrelatedVisibleNotificationBubble() {
+        let surface = FakePetSurface()
+        let envelope = completionEnvelope()
+        let controller = PetController(surface: surface)
+
+        controller.handle(envelope)
+        controller.dashboardSelectionChanged(sessionID: "codex-selected")
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(surface.dismissCount, 1)
+    }
+
     func testSelectingDiscoveredDashboardSessionDismissesMatchingHookNotificationBubble() {
         let surface = FakePetSurface()
         let envelope = codexCompletionEnvelope()
