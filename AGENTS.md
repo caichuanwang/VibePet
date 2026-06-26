@@ -56,7 +56,7 @@ To make VibePet behave like a fresh first launch, clear the app's persisted stat
 
 ## Reference Project: open-vibe-island
 
-A full clone of **open-vibe-island** (Octane0411/open-vibe-island) lives at `open-vibe-island/` in the repo root. VibePet is essentially "open-vibe-island's architecture + a desktop pet", so it is the primary architecture reference. **You may read its source freely** to align bridge/session/installer/terminal-jump design; reimplement in VibePet's own models and naming rather than copying verbatim. Do not build or test it as part of VibePet — it is a self-contained nested package (its own `Package.swift` + `.git`) that the root `swift build`/`swift test` does not include.
+A full clone of **open-vibe-island** (Octane0411/open-vibe-island) lives at `open-vibe-island/` in the repo root. VibePet is essentially "open-vibe-island's architecture + a desktop pet", so it is the primary architecture reference. **You may read its source freely** . It is acceptable to borrow architecture, data flow, naming inspiration, tests, edge-case handling, and implementation strategy from open-vibe-island as long as the result is adapted into VibePet's own models, scope, and naming rather than pasted verbatim or copied in large unchanged blocks. Do not build or test it as part of VibePet — it is a self-contained nested package (its own `Package.swift` + `.git`) that the root `swift build`/`swift test` does not include.
 
 **Its shape mirrors VibePet 1:1** — single Swift package, four targets:
 
@@ -77,7 +77,7 @@ A full clone of **open-vibe-island** (Octane0411/open-vibe-island) lives at `ope
 - Sub-project 1 (session model + hooks): the four Core files above, plus `ClaudeHooks.swift` / `CodexHooks.swift` (payload → event) and `*HookInstaller.swift` / `*HookInstallationManager.swift` (config writing). Design notes: `open-vibe-island/docs/architecture.md`, `docs/hooks.md`, `docs/session-state-refactor.md`.
 - Sub-project 3 (terminal jump-back): `Sources/OpenIslandApp/TerminalJumpService.swift`, `TerminalJumpTargetResolver.swift`, `ForegroundTerminalSessionProbe.swift`.
 
-**Scope caveats — do not copy breadth:** open-vibe-island supports ~10 agents and 15+ terminals/IDEs, a notch overlay UI, Sparkle auto-update, Apple Watch relay, and keystroke/AX injection. VibePet stays at the MVP surface (Claude Code + Codex), has no notch UI, and adds the Codex-spritesheet pet instead. Take the architecture and the precise-jump-at-hook-time insight; leave the extra agents, terminals, and UI surface out unless a VibePet spec asks for them.
+**Scope caveats — adapt, do not clone wholesale:** open-vibe-island supports ~10 agents and 15+ terminals/IDEs, a notch overlay UI, Sparkle auto-update, Apple Watch relay, and keystroke/AX injection. VibePet stays at the MVP surface (Claude Code + Codex), has no notch UI, and adds the Codex-spritesheet pet instead. Take the architecture, event/session patterns, installer lessons, and precise-jump-at-hook-time insight when useful; leave the extra agents, terminals, and UI surface out unless a VibePet spec asks for them. The important boundary is avoiding direct copy-paste or broad unmodified imports, not avoiding the reference project.
 
 # AGENTS.md
 
