@@ -34,6 +34,8 @@ final class PetController {
     private var decisions = BubbleQueue<PendingDecision>()
     private var frontDecisionRenderer: (() -> SessionDashboardCard?)?
     private var frontDashboardCard: SessionDashboardCard?
+    private var activeNotificationSessionID: String?
+    private var activeNotificationSource: SourceInfo?
 
     /// Notifications that arrived while a decision was active (decide > notify):
     /// they accumulate as a badge instead of clobbering the approval card.
@@ -92,17 +94,25 @@ final class PetController {
             surface.updateNotificationBadge(notificationBadge)
             return
         }
+        guard !selectedDashboardMatches(source: envelope.source) else {
+            dismissNotificationBubbleIfActive(matching: envelope.source)
+            return
+        }
         guard machine.receive(envelope.content) else {
             return
         }
 
         guard let petFrame = surface.petFrame else {
-            // Pet hidden / no window → nothing to anchor to; drop back to idle.
+            // Pet hidden / no window -> nothing to anchor to; drop back to idle.
+            activeNotificationSessionID = nil
+            activeNotificationSource = nil
             machine.bubbleDismissed()
             render()
             return
         }
 
+        activeNotificationSessionID = envelope.source.sessionID
+        activeNotificationSource = envelope.source
         let placement = BubbleAnchor.place(
             petFrame: petFrame,
             bubbleSize: bubbleSize(for: envelope.content),
@@ -226,7 +236,7 @@ final class PetController {
                 self?.frontDashboardCard = card
                 return card
             }
-            if surface.selectedDashboardSessionID != front.envelope.source.sessionID {
+            if !selectedDashboardMatches(source: front.envelope.source) {
                 surface.presentApproval(
                     content: approval,
                     source: front.envelope.source,
@@ -260,7 +270,7 @@ final class PetController {
                 self?.frontDashboardCard = card
                 return card
             }
-            if surface.selectedDashboardSessionID != front.envelope.source.sessionID {
+            if !selectedDashboardMatches(source: front.envelope.source) {
                 surface.presentQuestion(
                     content: question,
                     source: front.envelope.source,
@@ -313,9 +323,81 @@ final class PetController {
     }
 
     private func handleBubbleDismissed() {
+        activeNotificationSessionID = nil
+        activeNotificationSource = nil
         machine.bubbleDismissed()
         surface.dismissBubble()
         render()
+    }
+
+    private func dismissNotificationBubbleIfActive(matching source: SourceInfo) {
+        guard activeNotificationSessionID == source.sessionID else {
+            return
+        }
+        activeNotificationSessionID = nil
+        activeNotificationSource = nil
+        machine.bubbleDismissed()
+        surface.dismissBubble()
+        render()
+    }
+
+    private func dismissNotificationBubbleIfActive(matching selection: DashboardSessionSelection) {
+        guard let source = activeNotificationSource, selection.matches(source) else {
+            return
+        }
+        activeNotificationSessionID = nil
+        activeNotificationSource = nil
+        machine.bubbleDismissed()
+        surface.dismissBubble()
+        render()
+    }
+
+    private func selectedDashboardMatches(source: SourceInfo) -> Bool {
+        DashboardSessionSelection(
+            sessionID: surface.selectedDashboardSessionID,
+            jumpTarget: surface.selectedDashboardJumpTarget
+        ).matches(source)
+    }
+
+    private struct DashboardSessionSelection {
+        let sessionID: String?
+        let jumpTarget: JumpTarget?
+
+        func matches(_ source: SourceInfo) -> Bool {
+            guard let sessionID else { return false }
+            if sessionID == source.sessionID { return true }
+            guard isDiscoveredSessionID(sessionID, for: source.tool) else { return false }
+            return jumpTargetMatches(source: source)
+        }
+
+        private func jumpTargetMatches(source: SourceInfo) -> Bool {
+            guard let jumpTarget else { return false }
+            if let selectedTTY = normalizedNonEmpty(jumpTarget.terminalTTY),
+               let sourceTTY = normalizedNonEmpty(source.jumpTarget?.terminalTTY),
+               selectedTTY == sourceTTY {
+                return true
+            }
+            if let selectedSession = normalizedNonEmpty(jumpTarget.terminalSessionID),
+               let sourceSession = normalizedNonEmpty(source.jumpTarget?.terminalSessionID),
+               selectedSession == sourceSession {
+                return true
+            }
+            guard let selectedCWD = normalizedNonEmpty(jumpTarget.workingDirectory),
+                  let sourceCWD = normalizedNonEmpty(source.jumpTarget?.workingDirectory ?? source.cwd) else {
+                return false
+            }
+            return selectedCWD == sourceCWD
+        }
+
+        private func isDiscoveredSessionID(_ sessionID: String, for tool: ToolKind) -> Bool {
+            sessionID.hasPrefix("discovered-\(tool.rawValue)-")
+        }
+
+        private func normalizedNonEmpty(_ value: String?) -> String? {
+            guard let value else { return nil }
+            let normalized = value.replacingOccurrences(of: "/dev/", with: "")
+            return normalized.isEmpty ? nil : normalized
+        }
     }
 
     private func render() {
@@ -360,14 +442,25 @@ final class PetController {
     }
 
     func dashboardCard(for sessionID: String) -> SessionDashboardCard? {
-        guard decisions.front?.envelope.source.sessionID == sessionID else {
+        guard let source = decisions.front?.envelope.source else {
+            return nil
+        }
+        let selection = DashboardSessionSelection(
+            sessionID: sessionID,
+            jumpTarget: surface.selectedDashboardSessionID == sessionID ? surface.selectedDashboardJumpTarget : nil
+        )
+        guard selection.matches(source) else {
             return nil
         }
         return frontDecisionRenderer?()
     }
 
-    func dashboardSelectionChanged(sessionID: String?) {
+    func dashboardSelectionChanged(sessionID: String?, jumpTarget: JumpTarget? = nil) {
         surface.selectedDashboardSessionID = sessionID
+        surface.selectedDashboardJumpTarget = sessionID == nil ? nil : jumpTarget
+        dismissNotificationBubbleIfActive(
+            matching: DashboardSessionSelection(sessionID: sessionID, jumpTarget: jumpTarget)
+        )
         presentFrontDecision()
     }
 
@@ -385,6 +478,7 @@ protocol PetSurface: AnyObject {
     /// Usable screen area for bubble clamping.
     var visibleFrame: CGRect { get }
     var selectedDashboardSessionID: String? { get set }
+    var selectedDashboardJumpTarget: JumpTarget? { get set }
     func renderPet(asset: PetAsset?, activity: PetActivity)
     func showPetSwitchTooltip(name: String)
     func updateDashboardContent()

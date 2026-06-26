@@ -322,7 +322,9 @@ final class BridgeServerHost {
         switch event {
         case .sessionStarted:
             return false
-        case .activityUpdated, .permissionRequested, .questionAsked, .sessionCompleted, .jumpTargetUpdated, .actionableStateResolved:
+        case let .activityUpdated(_, _, summary):
+            return !SessionState.isUserPromptSummary(summary)
+        case .permissionRequested, .questionAsked, .sessionCompleted, .jumpTargetUpdated, .actionableStateResolved:
             return true
         }
     }

@@ -37,7 +37,7 @@ final class OverlayWindowBehaviorTests: XCTestCase {
             petFrame: CGRect(x: 0, y: 0, width: 120, height: 120),
             visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
             cardProvider: { _ in nil },
-            onSelectedSessionChanged: { _ in }
+            onSelectedSessionChanged: { _, _ in }
         )
 
         guard let panel = controller.window as? NSPanel else {

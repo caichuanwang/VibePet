@@ -53,6 +53,7 @@ public struct AgentSession: Codable, Equatable, Identifiable, Sendable {
     public var tool: ToolKind
     public var phase: SessionPhase
     public var summary: String
+    public var latestUserPrompt: String?
     public var updatedAt: Date
     public var firstSeenAt: Date
     public var jumpTarget: JumpTarget?
@@ -73,13 +74,15 @@ public struct AgentSession: Codable, Equatable, Identifiable, Sendable {
         isError: Bool = false,
         isSessionEnded: Bool = false,
         isProcessAlive: Bool = true,
-        processNotSeenCount: Int = 0
+        processNotSeenCount: Int = 0,
+        latestUserPrompt: String? = nil
     ) {
         self.id = id
         self.title = title
         self.tool = tool
         self.phase = phase
         self.summary = summary
+        self.latestUserPrompt = latestUserPrompt
         self.updatedAt = updatedAt
         self.firstSeenAt = firstSeenAt ?? updatedAt
         self.jumpTarget = jumpTarget

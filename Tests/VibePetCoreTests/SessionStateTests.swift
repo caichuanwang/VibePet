@@ -67,12 +67,40 @@ final class SessionStateTests: XCTestCase {
             isError: true,
             isSessionEnded: false,
             isProcessAlive: false,
-            processNotSeenCount: 1
+            processNotSeenCount: 1,
+            latestUserPrompt: "Build a dashboard"
         )
 
         let decoded = try roundTrip(session)
 
         XCTAssertEqual(decoded, session)
+    }
+
+    func testAgentSessionDecodesWithoutLatestUserPrompt() throws {
+        let data = Data(
+            """
+            {
+              "id": "session-1",
+              "title": "VibePet",
+              "tool": "codex",
+              "phase": "completed",
+              "summary": "Done",
+              "updatedAt": 1700000000,
+              "firstSeenAt": 1699999990,
+              "isError": false,
+              "isSessionEnded": false,
+              "isProcessAlive": true,
+              "processNotSeenCount": 0
+            }
+            """.utf8
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+
+        let session = try decoder.decode(AgentSession.self, from: data)
+
+        XCTAssertNil(session.latestUserPrompt)
+        XCTAssertEqual(session.summary, "Done")
     }
 
     func testAttentionRequiringSessionIsVisibleRegardlessOfLiveness() {
@@ -175,6 +203,26 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.sessionsByID["s1"]?.phase, .running)
         XCTAssertEqual(state.sessionsByID["s1"]?.summary, "Codex PostToolUse: Bash")
         XCTAssertEqual(state.sessionsByID["s1"]?.updatedAt, base.addingTimeInterval(30))
+    }
+
+    func testActivityUpdatedCapturesUserPromptAcrossCompletion() {
+        var state = state(applying: [started("s1", at: base)])
+
+        state.apply(.activityUpdated(
+            sessionID: "s1",
+            timestamp: base.addingTimeInterval(1),
+            summary: "User prompt: Make the dashboard denser"
+        ))
+        state.apply(.sessionCompleted(
+            sessionID: "s1",
+            timestamp: base.addingTimeInterval(2),
+            summary: "Done",
+            isError: false,
+            isSessionEnd: false
+        ))
+
+        XCTAssertEqual(state.sessionsByID["s1"]?.latestUserPrompt, "Make the dashboard denser")
+        XCTAssertEqual(state.sessionsByID["s1"]?.summary, "Done")
     }
 
     func testJumpTargetUpdatedChangesOnlyJumpTargetAndTimestamp() {

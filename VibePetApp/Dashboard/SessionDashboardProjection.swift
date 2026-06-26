@@ -18,6 +18,9 @@ struct SessionDashboardProjection: Equatable {
         let terminalTag: String?
         let elapsed: String
         let summary: String
+        let latestUserPrompt: String?
+        let detailSummary: String?
+        let emptyDetailSummary: String
     }
 
     let rows: [Row]
@@ -37,7 +40,10 @@ struct SessionDashboardProjection: Equatable {
                 toolTag: Self.toolTag(for: session.tool),
                 terminalTag: session.jumpTarget?.terminalApp,
                 elapsed: Self.elapsed(from: session.firstSeenAt, to: now),
-                summary: session.summary
+                summary: session.summary,
+                latestUserPrompt: session.latestUserPrompt,
+                detailSummary: Self.detailSummary(for: session),
+                emptyDetailSummary: Self.emptyDetailSummary(for: session)
             )
         }
         totalCount = state.visibleSessions.count
@@ -106,6 +112,31 @@ struct SessionDashboardProjection: Equatable {
             "claude"
         case .codex:
             "codex"
+        }
+    }
+
+    static func detailSummary(for session: AgentSession) -> String? {
+        let summary = session.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else { return nil }
+        if SessionState.isUserPromptSummary(summary) {
+            return nil
+        }
+        if session.id.hasPrefix("discovered-"), summary.hasPrefix("Detected running ") {
+            return nil
+        }
+        return summary
+    }
+
+    static func emptyDetailSummary(for session: AgentSession) -> String {
+        switch session.phase {
+        case .running:
+            return "Waiting for agent output..."
+        case .waitingForApproval:
+            return "Waiting for approval..."
+        case .waitingForAnswer:
+            return "Waiting for your answer..."
+        case .completed:
+            return session.isError ? "Session ended with an error." : "Session completed."
         }
     }
 

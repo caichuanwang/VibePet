@@ -9,9 +9,10 @@ enum BubbleTheme {
     static let maxWidth: CGFloat = 380
     static let cornerRadius: CGFloat = 8
     static let innerCornerRadius: CGFloat = 6
-    static let contentMaxHeight: CGFloat = 132 // ~6 lines before internal scroll
+    static let contentMaxHeight: CGFloat = 132 // Panel-like reading area before internal scroll.
     static let padding: CGFloat = 12
     static let tailSize = CGSize(width: 18, height: 9)
+    static let scrollThumbWidth: CGFloat = 2
 
     static let background = Color(red: 0.09, green: 0.10, blue: 0.12).opacity(0.94)
     static let cardBackground = Color.white.opacity(0.07)

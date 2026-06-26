@@ -29,13 +29,156 @@ struct SessionDashboardCard {
     let resolve: (BridgeResponse) -> Void
 }
 
+enum DashboardTranscriptDisplayText {
+    static func plainText(from markdown: String) -> String {
+        markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+enum DashboardTranscriptLayout {
+    static let showsSourceHeader = false
+    static let scrollThumbWidth: CGFloat = 2
+}
+
+private struct DashboardTranscriptContent: View {
+    let session: AgentSession
+    let detailSummary: String
+
+    private var bodyText: String {
+        DashboardTranscriptDisplayText.plainText(from: detailSummary)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: statusIcon)
+                .foregroundStyle(statusColor)
+                .font(.system(size: 16, weight: .semibold))
+                .padding(.top, 1)
+            ThinDashboardScrollView {
+                Text(bodyText)
+                    .font(BubbleTheme.bodyFont)
+                    .foregroundStyle(textColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(.trailing, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var statusIcon: String {
+        if session.phase == .completed {
+            return session.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+        }
+        return "message.fill"
+    }
+
+    private var statusColor: Color {
+        if session.phase == .completed {
+            return session.isError ? BubbleTheme.errorAccent : Color(nsColor: .systemGreen)
+        }
+        return Color(nsColor: .systemBlue)
+    }
+
+    private var textColor: Color {
+        session.isError ? BubbleTheme.errorAccent : BubbleTheme.bodyText
+    }
+}
+
+private struct ThinDashboardScrollView<Content: View>: View {
+    private let content: () -> Content
+    private let coordinateSpaceName = "thinDashboardScroll"
+
+    @State private var viewportHeight: CGFloat = 1
+    @State private var contentHeight: CGFloat = 1
+    @State private var contentMinY: CGFloat = 0
+
+    init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = content
+    }
+
+    private var trackHeight: CGFloat {
+        max(viewportHeight - 2, 1)
+    }
+
+    private var thumbHeight: CGFloat {
+        guard contentHeight > viewportHeight else { return trackHeight }
+        return min(trackHeight, max(20, trackHeight * viewportHeight / contentHeight))
+    }
+
+    private var thumbOffset: CGFloat {
+        let maxScroll = max(contentHeight - viewportHeight, 1)
+        let scrollOffset = min(max(-contentMinY, 0), maxScroll)
+        return scrollOffset / maxScroll * max(trackHeight - thumbHeight, 0)
+    }
+
+    var body: some View {
+        GeometryReader { viewport in
+            ZStack(alignment: .trailing) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    content()
+                        .background(
+                            GeometryReader { contentProxy in
+                                Color.clear.preference(
+                                    key: ThinDashboardScrollMetricsKey.self,
+                                    value: ThinDashboardScrollMetrics(
+                                        height: contentProxy.size.height,
+                                        minY: contentProxy.frame(in: .named(coordinateSpaceName)).minY
+                                    )
+                                )
+                            }
+                        )
+                }
+                .coordinateSpace(name: coordinateSpaceName)
+                .onAppear {
+                    viewportHeight = max(viewport.size.height, 1)
+                }
+                .onChange(of: viewport.size.height) { _, height in
+                    viewportHeight = max(height, 1)
+                }
+                .onPreferenceChange(ThinDashboardScrollMetricsKey.self) { metrics in
+                    contentHeight = max(metrics.height, 1)
+                    contentMinY = metrics.minY
+                }
+
+                if contentHeight > viewportHeight + 1 {
+                    VStack {
+                        Capsule()
+                            .fill(BubbleTheme.dashboardSecondaryText.opacity(0.34))
+                            .frame(width: DashboardTranscriptLayout.scrollThumbWidth, height: thumbHeight)
+                            .offset(y: thumbOffset)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: DashboardTranscriptLayout.scrollThumbWidth, height: trackHeight, alignment: .top)
+                    .padding(.vertical, 1)
+                    .allowsHitTesting(false)
+                }
+            }
+        }
+    }
+}
+
+private struct ThinDashboardScrollMetrics: Equatable {
+    var height: CGFloat = 1
+    var minY: CGFloat = 0
+}
+
+private struct ThinDashboardScrollMetricsKey: PreferenceKey {
+    static let defaultValue = ThinDashboardScrollMetrics()
+
+    static func reduce(value: inout ThinDashboardScrollMetrics, nextValue: () -> ThinDashboardScrollMetrics) {
+        value = nextValue()
+    }
+}
+
 struct SessionDashboardView: View {
     @ObservedObject var model: SessionDashboardModel
     let cardProvider: (String) -> SessionDashboardCard?
     let onJump: (JumpTarget) -> Void
-    let onSelectedSessionChanged: (String?) -> Void
+    let onSelectedSessionChanged: (String?, JumpTarget?) -> Void
 
     @State private var selectedSessionID: String?
+    @State private var selectedSessionJumpTarget: JumpTarget?
 
     var body: some View {
         let projection = projection
@@ -65,13 +208,13 @@ struct SessionDashboardView: View {
     }
 
     private func sidebar(projection: SessionDashboardProjection, selectedSessionID: String?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             sidebarHeader(projection: projection)
             if projection.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    VStack(spacing: 6) {
+                ThinDashboardScrollView {
+                    VStack(spacing: 5) {
                         ForEach(projection.rows) { row in
                             sessionRow(row, isSelected: row.id == selectedSessionID)
                         }
@@ -80,19 +223,19 @@ struct SessionDashboardView: View {
                 }
             }
         }
-        .padding(12)
-        .frame(width: 210)
+        .padding(10)
+        .frame(width: 178)
         .frame(maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func sidebarHeader(projection: SessionDashboardProjection) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 7) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
                 Circle()
                     .fill(BubbleTheme.dashboardStatusColor(projection.attentionCount > 0 ? .attention : .running))
                     .frame(width: 7, height: 7)
                 Text("Sessions")
-                    .font(.callout.weight(.semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(BubbleTheme.dashboardPrimaryText)
                 Spacer(minLength: 0)
             }
@@ -122,15 +265,17 @@ struct SessionDashboardView: View {
 
     private func sessionRow(_ row: SessionDashboardProjection.Row, isSelected: Bool) -> some View {
         Button {
+            let jumpTarget = model.state.sessionsByID[row.id]?.jumpTarget
             selectedSessionID = row.id
-            onSelectedSessionChanged(row.id)
+            selectedSessionJumpTarget = jumpTarget
+            onSelectedSessionChanged(row.id, jumpTarget)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 Circle()
                     .fill(BubbleTheme.dashboardStatusColor(row.status))
-                    .frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 5) {
+                    .frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
                         Text(row.title)
                             .font(.caption.weight(.semibold))
                             .lineLimit(1)
@@ -143,7 +288,7 @@ struct SessionDashboardView: View {
                                 .background(BubbleTheme.dashboardStatusColor(.attention), in: Circle())
                         }
                     }
-                    HStack(spacing: 5) {
+                    HStack(spacing: 4) {
                         Text(row.toolTag)
                             .lineLimit(1)
                         if let terminalTag = row.terminalTag {
@@ -158,15 +303,15 @@ struct SessionDashboardView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 isSelected ? BubbleTheme.dashboardActivePillBackground : BubbleTheme.dashboardCardBackground,
-                in: RoundedRectangle(cornerRadius: 8)
+                in: RoundedRectangle(cornerRadius: 7)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8).stroke(
+                RoundedRectangle(cornerRadius: 7).stroke(
                     isSelected ? BubbleTheme.dashboardStatusColor(row.status).opacity(0.55) : BubbleTheme.dashboardBorder,
                     lineWidth: 1
                 )
@@ -177,12 +322,20 @@ struct SessionDashboardView: View {
 
     @ViewBuilder
     private func detailPane(selection: String?, projection: SessionDashboardProjection) -> some View {
-        if let selection, let session = model.state.sessionsByID[selection] {
-            VStack(alignment: .leading, spacing: 10) {
-                detailHeader(session, projection: projection)
-                tabContent(session)
+        if
+            let selection,
+            let session = model.state.sessionsByID[selection],
+            let row = projection.rows.first(where: { $0.id == selection })
+        {
+            VStack(alignment: .leading, spacing: 9) {
+                if let prompt = row.latestUserPrompt {
+                    userPromptHeader(prompt)
+                    Divider().overlay(BubbleTheme.dashboardBorder)
+                }
+                tabContent(session, detailSummary: row.detailSummary ?? row.emptyDetailSummary)
             }
-            .padding(12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             VStack(alignment: .leading, spacing: 8) {
@@ -198,98 +351,44 @@ struct SessionDashboardView: View {
         }
     }
 
-    private func detailHeader(_ session: AgentSession, projection: SessionDashboardProjection) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(BubbleTheme.dashboardStatusColor(SessionDashboardProjection.status(for: session)))
-                    .frame(width: 8, height: 8)
-                Text(session.title)
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(BubbleTheme.dashboardPrimaryText)
-                Spacer(minLength: 0)
-                if projection.attentionCount > 0, !session.phase.requiresAttention {
-                    Text("\(projection.attentionCount) action")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(BubbleTheme.dashboardPrimaryText)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(BubbleTheme.dashboardStatusColor(.attention).opacity(0.24), in: Capsule())
-                }
-            }
-            HStack(spacing: 6) {
-                tag(SessionDashboardProjection.toolTag(for: session.tool))
-                if let terminalTag = session.jumpTarget?.terminalApp {
-                    tag(terminalTag)
-                }
-                Text(session.phase.requiresAttention ? "needs user decision" : session.phase.rawValue)
-                    .font(.caption2)
-                    .foregroundStyle(BubbleTheme.dashboardSecondaryText)
-                    .lineLimit(1)
-            }
+    private func userPromptHeader(_ prompt: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("You:")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(BubbleTheme.dashboardSecondaryText)
+                .lineLimit(1)
+            Text(prompt)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(BubbleTheme.dashboardPrimaryText.opacity(0.82))
+                .lineLimit(2)
+                .truncationMode(.tail)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
+        .padding(.top, 1)
     }
 
     @ViewBuilder
-    private func tabContent(_ session: AgentSession) -> some View {
+    private func tabContent(_ session: AgentSession, detailSummary: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if let card = cardProvider(session.id) {
                 card.view
                     .id(card.id)
             } else {
-                SpeechBubble(
-                    content: dashboardContent(for: session),
-                    source: sourceInfo(for: session),
-                    tailEdge: .bottom,
-                    tailOffsetX: 40,
-                    autoDismiss: false,
-                    onJump: onJump,
-                    onDismiss: {}
-                )
-                .id("\(session.id)-\(session.phase)-\(session.updatedAt.timeIntervalSince1970)")
+                DashboardTranscriptContent(session: session, detailSummary: detailSummary)
+                    .id("\(session.id)-\(session.phase)-\(session.updatedAt.timeIntervalSince1970)")
             }
         }
-        .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(BubbleTheme.dashboardCardBackground, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8).stroke(BubbleTheme.dashboardBorder, lineWidth: 1)
-        )
         .clipped()
     }
 
-    private func dashboardContent(for session: AgentSession) -> BubbleContent {
-        if session.phase == .completed {
-            return .completion(CompletionContent(markdownSummary: session.summary, isError: session.isError))
-        }
-        return .status(StatusContent(text: session.summary))
-    }
-
-    private func sourceInfo(for session: AgentSession) -> SourceInfo {
-        SourceInfo(
-            tool: session.tool,
-            projectName: session.title,
-            sessionID: session.id,
-            sessionShortId: String(session.id.prefix(6)),
-            cwd: session.jumpTarget?.workingDirectory,
-            jumpTarget: session.jumpTarget
-        )
-    }
-
-    private func tag(_ text: String) -> some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .foregroundStyle(BubbleTheme.dashboardPrimaryText)
-            .background(BubbleTheme.dashboardPillBackground, in: Capsule())
-    }
 
     private func applyResolvedSelection(_ selection: String?) {
-        guard selectedSessionID != selection else { return }
+        let jumpTarget = selection.flatMap { model.state.sessionsByID[$0]?.jumpTarget }
+        guard selectedSessionID != selection || selectedSessionJumpTarget != jumpTarget else { return }
         selectedSessionID = selection
-        onSelectedSessionChanged(selection)
+        selectedSessionJumpTarget = jumpTarget
+        onSelectedSessionChanged(selection, jumpTarget)
     }
 }

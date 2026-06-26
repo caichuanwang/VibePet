@@ -20,6 +20,7 @@ final class PetWindowSurface: PetSurface {
     private var lastRenderedPetSlug: String?
     weak var dashboardController: SessionDashboardWindowController?
     var selectedDashboardSessionID: String?
+    var selectedDashboardJumpTarget: JumpTarget?
 
     func bind(windowController: PetWindowController?) {
         self.windowController = windowController

@@ -204,15 +204,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onJump: { target in
                 try? TerminalJumpService().jump(to: target)
             },
-            onSelectedSessionChanged: { [weak self] sessionID in
-                self?.petController.dashboardSelectionChanged(sessionID: sessionID)
+            onSelectedSessionChanged: { [weak self] sessionID, jumpTarget in
+                self?.petController.dashboardSelectionChanged(sessionID: sessionID, jumpTarget: jumpTarget)
             }
         )
         controller.onClose = { [weak self, weak controller] in
             guard self?.dashboardWindowController === controller else { return }
             self?.dashboardWindowController = nil
             self?.petWindowSurface.dashboardController = nil
-            self?.petController.dashboardSelectionChanged(sessionID: nil)
+            self?.petController.dashboardSelectionChanged(sessionID: nil, jumpTarget: nil)
         }
         dashboardWindowController = controller
         petWindowSurface.dashboardController = controller

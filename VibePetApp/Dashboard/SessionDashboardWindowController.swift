@@ -18,7 +18,7 @@ final class SessionDashboardWindowController: NSWindowController, NSWindowDelega
         visibleFrame: CGRect,
         cardProvider: @escaping (String) -> SessionDashboardCard?,
         onJump: @escaping (JumpTarget) -> Void = { _ in },
-        onSelectedSessionChanged: @escaping (String?) -> Void
+        onSelectedSessionChanged: @escaping (String?, JumpTarget?) -> Void
     ) {
         model = SessionDashboardModel(state: state, activePetName: activePetName)
         let view = SessionDashboardView(

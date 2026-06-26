@@ -84,7 +84,8 @@ public struct SessionState: Equatable, Sendable {
                 isError: false,
                 isSessionEnded: false,
                 isProcessAlive: true,
-                processNotSeenCount: 0
+                processNotSeenCount: 0,
+                latestUserPrompt: existing?.latestUserPrompt ?? Self.userPrompt(from: summary)
             )
             sessionsByID[sessionID] = session
 
@@ -94,6 +95,9 @@ public struct SessionState: Equatable, Sendable {
                 session.phase = .running
             }
             session.summary = summary
+            if let userPrompt = Self.userPrompt(from: summary) {
+                session.latestUserPrompt = userPrompt
+            }
             session.updatedAt = timestamp
             session.isProcessAlive = true
             session.processNotSeenCount = 0
@@ -135,6 +139,18 @@ public struct SessionState: Equatable, Sendable {
             session.updatedAt = timestamp
             sessionsByID[sessionID] = session
         }
+    }
+
+    public static func userPrompt(from summary: String) -> String? {
+        let prefix = "User prompt:"
+        guard summary.hasPrefix(prefix) else { return nil }
+        let prompt = summary.dropFirst(prefix.count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return prompt.isEmpty ? nil : prompt
+    }
+
+    public static func isUserPromptSummary(_ summary: String) -> Bool {
+        userPrompt(from: summary) != nil
     }
 
     public mutating func resolvePermission(sessionID: String, approved: Bool, at timestamp: Date = .now) {

@@ -66,6 +66,67 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(jumped, [JumpTarget(terminalApp: "Terminal", terminalTTY: "/dev/ttys001")])
     }
 
+    func testDashboardSelectedSessionSuppressesNotificationBubble() {
+        let surface = FakePetSurface()
+        let envelope = completionEnvelope()
+        surface.selectedDashboardSessionID = envelope.source.sessionID
+        let controller = PetController(surface: surface)
+
+        controller.handle(envelope)
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertTrue(surface.presentedBubbles.isEmpty)
+    }
+
+    func testSelectingDashboardSessionDismissesMatchingNotificationBubble() {
+        let surface = FakePetSurface()
+        let envelope = completionEnvelope()
+        let controller = PetController(surface: surface)
+
+        controller.handle(envelope)
+        controller.dashboardSelectionChanged(sessionID: envelope.source.sessionID)
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(surface.dismissCount, 1)
+    }
+
+    func testSelectingDiscoveredDashboardSessionDismissesMatchingHookNotificationBubble() {
+        let surface = FakePetSurface()
+        let envelope = codexCompletionEnvelope()
+        surface.selectedDashboardSessionID = "discovered-codex-123"
+        surface.selectedDashboardJumpTarget = JumpTarget(
+            terminalApp: "Ghostty",
+            workingDirectory: envelope.source.cwd,
+            terminalTTY: "ttys001"
+        )
+        let controller = PetController(surface: surface)
+
+        controller.handle(envelope)
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertTrue(surface.presentedBubbles.isEmpty)
+        XCTAssertEqual(surface.dismissCount, 0)
+    }
+
+    func testSelectingDiscoveredDashboardSessionAfterBubbleAppearsDismissesMatchingHookNotificationBubble() {
+        let surface = FakePetSurface()
+        let envelope = codexCompletionEnvelope()
+        let controller = PetController(surface: surface)
+
+        controller.handle(envelope)
+        controller.dashboardSelectionChanged(
+            sessionID: "discovered-codex-123",
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workingDirectory: envelope.source.cwd,
+                terminalTTY: "ttys001"
+            )
+        )
+
+        XCTAssertEqual(controller.state, .idle)
+        XCTAssertEqual(surface.dismissCount, 1)
+    }
+
     func testSessionSyncDoesNotDismissVisibleNotificationBubble() {
         let surface = FakePetSurface()
         let controller = PetController(surface: surface)
@@ -132,6 +193,27 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["session-full"]?.phase, .running)
         XCTAssertEqual(surface.lastActivity, .waving)
         XCTAssertTrue(surface.presentedBubbles.isEmpty, "SessionStart is state, not a user-facing bubble")
+    }
+
+    func testUserPromptActivityUpdatesStateWithoutNotificationBubble() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        host.applyForTesting(codexSessionStartEnvelope(sessionID: "codex-prompt").agentEvent!)
+        try await BridgeClient(socketPath: socketPath).sendOneWay(userPromptActivityEnvelope())
+
+        try await waitUntil {
+            host.sessionStateSnapshot.sessionsByID["codex-prompt"]?.latestUserPrompt == "Make the dashboard denser"
+        }
+        XCTAssertTrue(surface.presentedBubbles.isEmpty)
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-prompt"]?.summary, "User prompt: Make the dashboard denser")
     }
 
     // MARK: - Approval (decide) — M4-5 / M4-6
@@ -832,6 +914,25 @@ final class NotificationBubbleFlowTests: XCTestCase {
         )
     }
 
+    private func userPromptActivityEnvelope() -> BridgeEnvelope {
+        BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(
+                tool: .codex,
+                projectName: "VibePet",
+                sessionID: "codex-prompt",
+                sessionShortId: "codex-",
+                cwd: "/tmp/VibePet"
+            ),
+            content: .status(StatusContent(text: "User prompt: Make the dashboard denser")),
+            agentEvent: .activityUpdated(
+                sessionID: "codex-prompt",
+                timestamp: Date(),
+                summary: "User prompt: Make the dashboard denser"
+            )
+        )
+    }
+
     // MARK: - Helpers
 
     private func completionEnvelope(jumpTarget: JumpTarget? = nil) -> BridgeEnvelope {
@@ -908,6 +1009,7 @@ private final class FakePetSurface: PetSurface {
     var petFrame: CGRect? = CGRect(x: 800, y: 0, width: 120, height: 120)
     var visibleFrame: CGRect = CGRect(x: 0, y: 0, width: 1000, height: 800)
     var selectedDashboardSessionID: String?
+    var selectedDashboardJumpTarget: JumpTarget?
 
     private(set) var lastActivity: PetActivity?
     private(set) var presentedBubbles: [PresentedBubble] = []

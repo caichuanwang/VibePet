@@ -257,6 +257,7 @@ private final class DiscoveryTestPetSurface: PetSurface {
     var petFrame: CGRect? = CGRect(x: 0, y: 0, width: 120, height: 120)
     var visibleFrame: CGRect = CGRect(x: 0, y: 0, width: 1000, height: 800)
     var selectedDashboardSessionID: String?
+    var selectedDashboardJumpTarget: JumpTarget?
 
     func renderPet(asset: PetAsset?, activity: PetActivity) {}
     func showPetSwitchTooltip(name: String) {}
