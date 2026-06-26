@@ -127,10 +127,17 @@ struct ActiveAgentProcessDiscovery: Sendable {
 
     private func terminalApp(from command: String) -> String? {
         let lowercased = command.lowercased()
+        if isCmuxHostCommand(lowercased) { return "cmux" }
         if lowercased.contains("ghostty") { return "Ghostty" }
         if lowercased.contains("iterm") { return "iTerm" }
         if lowercased.contains("terminal") { return "Terminal" }
         return nil
+    }
+
+    private func isCmuxHostCommand(_ lowercasedCommand: String) -> Bool {
+        lowercasedCommand.contains("/applications/cmux.app/contents/macos/cmux")
+            || lowercasedCommand.contains("/cmux.app/contents/macos/cmux")
+            || lowercasedCommand.contains("/cmux-surface-resume/")
     }
 
     private func isCodexCommand(_ command: String) -> Bool {

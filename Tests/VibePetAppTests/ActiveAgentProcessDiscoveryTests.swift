@@ -55,6 +55,47 @@ final class ActiveAgentProcessDiscoveryTests: XCTestCase {
         XCTAssertEqual(sessions.first?.jumpTarget?.terminalApp, "Ghostty")
     }
 
+    func testInfersCmuxFromParentProcessChain() {
+        let psOutput = """
+          101   202 ttys005 /Users/test/.local/bin/claude --resume 358f323b-8f28-4f2c-881c-6652b64e58a0
+          202   303 ttys005 -/bin/zsh /var/folders/tmp/cmux-surface-resume/claude-FBF59C5C.zsh
+          303   304 ttys005 /usr/bin/login -flp test /bin/bash --noprofile --norc -c exec -l /bin/zsh '/var/folders/tmp/cmux-surface-resume/claude-FBF59C5C.zsh'
+          304     1 ?? /Applications/cmux.app/Contents/MacOS/cmux
+        """
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return psOutput
+            }
+            if executablePath == "/usr/sbin/lsof", arguments.contains("101") {
+                return "p101\nn/Users/test/Code/VibePet\n"
+            }
+            return nil
+        }
+
+        let sessions = discovery.discover()
+
+        XCTAssertEqual(sessions.first?.jumpTarget?.terminalApp, "cmux")
+    }
+
+    func testCmuxHookConfigurationInCommandDoesNotInferCmux() {
+        let psOutput = """
+          101     1 ttys001 /Users/test/.local/bin/claude --settings {"hooks":{"Stop":[{"hooks":[{"command":"\\"${CMUX_CLAUDE_HOOK_CMUX_BIN:-cmux}\\" hooks feed"}]}]}}
+        """
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return psOutput
+            }
+            if executablePath == "/usr/sbin/lsof", arguments.contains("101") {
+                return "p101\nn/Users/test/Code/VibePet\n"
+            }
+            return nil
+        }
+
+        let sessions = discovery.discover()
+
+        XCTAssertEqual(sessions.first?.jumpTarget?.terminalApp, "Terminal")
+    }
+
     func testIgnoresCodexServerAndHelperProcesses() {
         let psOutput = """
           101     1 ?? node /Users/test/.nvm/bin/codex app-server
