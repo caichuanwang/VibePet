@@ -1,0 +1,124 @@
+import Foundation
+import VibePetCore
+
+struct SessionDashboardProjection: Equatable {
+    enum Status: Equatable {
+        case idle
+        case running
+        case attention
+        case error
+        case completed
+    }
+
+    struct Row: Equatable, Identifiable {
+        let id: String
+        let title: String
+        let status: Status
+        let toolTag: String
+        let terminalTag: String?
+        let elapsed: String
+        let summary: String
+    }
+
+    let rows: [Row]
+    let totalCount: Int
+    let runningCount: Int
+    let attentionCount: Int
+    let emptyPetName: String
+
+    init(state: SessionState, activePetName: String, now: Date = .now) {
+        rows = state.visibleSessions
+            .sorted(by: Self.rowPrecedes)
+            .map { session in
+            Row(
+                id: session.id,
+                title: session.title,
+                status: Self.status(for: session),
+                toolTag: Self.toolTag(for: session.tool),
+                terminalTag: session.jumpTarget?.terminalApp,
+                elapsed: Self.elapsed(from: session.firstSeenAt, to: now),
+                summary: session.summary
+            )
+        }
+        totalCount = state.visibleSessions.count
+        runningCount = state.runningCount
+        attentionCount = state.attentionCount
+        emptyPetName = activePetName
+    }
+
+    var isEmpty: Bool {
+        rows.isEmpty
+    }
+
+    func resolvedSelection(current: String?) -> String? {
+        if let current, rows.contains(where: { $0.id == current }) {
+            return current
+        }
+        return rows.first?.id
+    }
+
+    private static func rowPrecedes(_ lhs: AgentSession, _ rhs: AgentSession) -> Bool {
+        let lhsRank = statusRank(status(for: lhs))
+        let rhsRank = statusRank(status(for: rhs))
+        if lhsRank != rhsRank {
+            return lhsRank < rhsRank
+        }
+        if lhs.updatedAt == rhs.updatedAt {
+            return lhs.id < rhs.id
+        }
+        return lhs.updatedAt > rhs.updatedAt
+    }
+
+    private static func statusRank(_ status: Status) -> Int {
+        switch status {
+        case .attention:
+            0
+        case .running:
+            1
+        case .error:
+            2
+        case .idle:
+            3
+        case .completed:
+            4
+        }
+    }
+
+    static func status(for session: AgentSession) -> Status {
+        if session.phase.requiresAttention {
+            return .attention
+        }
+        if session.phase == .completed, session.isError {
+            return .error
+        }
+        if session.phase == .completed, session.jumpTarget != nil, session.isProcessAlive {
+            return .idle
+        }
+        if session.phase == .completed {
+            return .completed
+        }
+        return .running
+    }
+
+    static func toolTag(for tool: ToolKind) -> String {
+        switch tool {
+        case .claudeCode:
+            "claude"
+        case .codex:
+            "codex"
+        }
+    }
+
+    static func elapsed(from start: Date, to now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+        let minutes = seconds / 60
+        if minutes < 60 {
+            return "\(minutes)m"
+        }
+        let hours = minutes / 60
+        return "\(hours)h"
+    }
+}

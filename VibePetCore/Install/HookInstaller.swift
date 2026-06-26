@@ -63,18 +63,28 @@ public struct HookInstaller: Sendable {
         )
         manifest.hookBinaryVersion = currentBinaryVersion
 
-        // Idempotent: already installed → only persist a possible binary version bump.
-        if let existing = manifest.tools[tool.rawValue], existing.installed {
+        // Idempotent: already installed and current → only persist a possible binary version bump.
+        // If the managed hook set changed, rewrite config so existing users pick up
+        // newly managed lifecycle hooks such as Codex PostToolUse.
+        if let existing = manifest.tools[tool.rawValue],
+           existing.installed,
+           Set(existing.writtenHooks) == Set(writer.managedHookKeys) {
             try store.write(manifest)
             return existing
         }
 
-        let backupPath = try backUpIfPresent(writer)
+        let previous = manifest.tools[tool.rawValue]
+        let backupPath: String?
+        if let previousBackupPath = previous?.backupPath {
+            backupPath = previousBackupPath
+        } else {
+            backupPath = try backUpIfPresent(writer)
+        }
         try writer.install(arguments: Self.arguments(for: tool))
 
         let record = ToolInstallRecord(
             installed: true,
-            activationState: Self.defaultActivation(for: tool),
+            activationState: previous?.activationState ?? Self.defaultActivation(for: tool),
             settingsPath: writer.configURL.path,
             writtenHooks: writer.managedHookKeys,
             backupPath: backupPath
@@ -171,7 +181,11 @@ public struct HookInstaller: Sendable {
         guard let record = manifest.tools[tool.rawValue], record.installed else {
             return .notInstalled
         }
-        if manifest.hookBinaryVersion != currentBinaryVersion {
+        guard let writer = writers[tool] else {
+            return .notInstalled
+        }
+        if manifest.hookBinaryVersion != currentBinaryVersion
+            || Set(record.writtenHooks) != Set(writer.managedHookKeys) {
             return .outdated
         }
         switch record.activationState {

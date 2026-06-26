@@ -17,6 +17,7 @@ struct SpeechBubble: View {
     let source: SourceInfo
     var tailEdge: TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
+    var autoDismiss = true
     var onJump: (JumpTarget) -> Void = { _ in }
     var onDismiss: () -> Void = {}
 
@@ -34,7 +35,6 @@ struct SpeechBubble: View {
             bodyContent
         }
         .padding(BubbleTheme.padding)
-        .padding(tailEdge == .bottom ? .bottom : .top, BubbleTheme.tailSize.height)
         .frame(minWidth: BubbleTheme.minWidth, maxWidth: BubbleTheme.maxWidth, alignment: .leading)
         .background(bubbleBackground)
         .contentShape(
@@ -93,7 +93,8 @@ struct SpeechBubble: View {
         switch content {
         case let .status(status):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("💬")
+                Image(systemName: "message.fill")
+                    .foregroundStyle(Color(nsColor: .systemBlue))
                 Text(status.text)
                     .font(BubbleTheme.bodyFont)
                     .foregroundStyle(BubbleTheme.bodyText)
@@ -102,7 +103,7 @@ struct SpeechBubble: View {
         case let .completion(completion):
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: completion.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(completion.isError ? BubbleTheme.errorAccent : Color.accentColor)
+                    .foregroundStyle(completion.isError ? BubbleTheme.errorAccent : Color(nsColor: .systemGreen))
                 ScrollView {
                     Text(markdown(completion.markdownSummary))
                         .font(BubbleTheme.bodyFont)
@@ -149,11 +150,15 @@ struct SpeechBubble: View {
             )
             .stroke(BubbleTheme.border, lineWidth: 1)
         )
+        .shadow(color: Color.black.opacity(0.22), radius: 14, y: 8)
     }
 
     // MARK: - Auto-dismiss
 
     private func runAutoDismiss() async {
+        guard autoDismiss else {
+            return
+        }
         var remaining = autoDismissSeconds
         let tick = 0.1
         while remaining > 0 {
@@ -184,39 +189,6 @@ struct BubbleShape: Shape {
     let tailSize: CGSize
 
     func path(in rect: CGRect) -> Path {
-        var path = Path(roundedRect: bodyRect(in: rect), cornerRadius: cornerRadius)
-        path.addPath(tailPath(in: rect))
-        return path
-    }
-
-    private func bodyRect(in rect: CGRect) -> CGRect {
-        switch tailEdge {
-        case .bottom:
-            return CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height - tailSize.height)
-        case .top:
-            return CGRect(x: rect.minX, y: rect.minY + tailSize.height, width: rect.width, height: rect.height - tailSize.height)
-        }
-    }
-
-    private func tailPath(in rect: CGRect) -> Path {
-        var path = Path()
-        let half = tailSize.width / 2
-        let centerX = min(max(tailOffsetX, cornerRadius + half), rect.width - cornerRadius - half)
-
-        switch tailEdge {
-        case .bottom:
-            let baseY = rect.maxY - tailSize.height
-            path.move(to: CGPoint(x: centerX - half, y: baseY))
-            path.addLine(to: CGPoint(x: centerX, y: rect.maxY))
-            path.addLine(to: CGPoint(x: centerX + half, y: baseY))
-        case .top:
-            let baseY = rect.minY + tailSize.height
-            path.move(to: CGPoint(x: centerX - half, y: baseY))
-            path.addLine(to: CGPoint(x: centerX, y: rect.minY))
-            path.addLine(to: CGPoint(x: centerX + half, y: baseY))
-        }
-
-        path.closeSubpath()
-        return path
+        Path(roundedRect: rect, cornerRadius: cornerRadius)
     }
 }

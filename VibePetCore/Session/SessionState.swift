@@ -196,4 +196,11 @@ public struct SessionState: Equatable, Sendable {
     public mutating func markGreetingShown(for sessionID: String) {
         greetedSessionIDs.insert(sessionID)
     }
+
+    public mutating func upsertDiscoveredSession(_ session: AgentSession) {
+        guard sessionsByID[session.id] == nil else {
+            return
+        }
+        sessionsByID[session.id] = session
+    }
 }

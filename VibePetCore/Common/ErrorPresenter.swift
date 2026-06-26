@@ -40,8 +40,8 @@ public enum ErrorPresenter {
             )
         case .outdated:
             return PresentedError(
-                message: "\(name) 的 hook 程序版本落后。",
-                suggestedAction: "重新安装以更新到最新版本。"
+                message: "\(name) 的受管 hook 已更新。",
+                suggestedAction: "重新安装一次以写入最新 hook。"
             )
         case .enabled, .notInstalled:
             return nil

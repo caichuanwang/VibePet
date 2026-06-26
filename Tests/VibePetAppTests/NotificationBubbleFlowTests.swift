@@ -138,7 +138,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     func testApprovalEntersDecideAndPresentsCard() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
 
         let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
         try await waitUntil { surface.presentedApprovals.count == 1 }
@@ -155,7 +155,6 @@ final class NotificationBubbleFlowTests: XCTestCase {
         var jumped: [JumpTarget] = []
         let controller = PetController(
             surface: surface,
-            decisionTimeout: 10,
             terminalJump: { jumped.append($0) }
         )
 
@@ -171,9 +170,25 @@ final class NotificationBubbleFlowTests: XCTestCase {
         _ = await task.value
     }
 
+    func testDashboardSelectedSessionSuppressesAnchoredApprovalCard() async throws {
+        let surface = FakePetSurface()
+        surface.selectedDashboardSessionID = "a1b2c3"
+        let controller = PetController(surface: surface)
+
+        let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
+        try await waitUntil { controller.dashboardCard(for: "a1b2c3") != nil }
+
+        XCTAssertTrue(surface.presentedApprovals.isEmpty)
+        XCTAssertEqual(surface.approvalDismissCount, 1)
+
+        controller.dashboardCard(for: "a1b2c3")?.resolve(.approval(.allowOnce))
+        let response = await task.value
+        XCTAssertEqual(response, .approval(.allowOnce))
+    }
+
     func testDenyResolvesWithPairedDenyAndReturnsToIdle() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
 
         let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
         try await waitUntil { surface.presentedApprovals.count == 1 }
@@ -187,7 +202,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     func testAllowOnceResolves() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
 
         let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
         try await waitUntil { surface.presentedApprovals.count == 1 }
@@ -197,13 +212,25 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(response, .approval(.allowOnce))
     }
 
-    func testUnansweredApprovalTimesOutToDefer() async {
+    func testUnansweredApprovalWaitsUntilUserDecision() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 0.05)
+        let controller = PetController(surface: surface)
 
-        let response = await controller.requestDecision(for: approvalEnvelope())
+        let completed = LockedOptionalValue<BridgeResponse>()
+        let task = Task { () -> BridgeResponse in
+            let response = await controller.requestDecision(for: approvalEnvelope())
+            completed.set(response)
+            return response
+        }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+        try await Task.sleep(nanoseconds: 100_000_000)
 
-        XCTAssertEqual(response, .defer)
+        XCTAssertNil(completed.value, "approval should not auto-defer on an App-side timeout")
+        XCTAssertEqual(controller.state, .decide)
+
+        surface.fireDecision(.approval(.allowOnce))
+        let response = await task.value
+        XCTAssertEqual(response, .approval(.allowOnce))
         XCTAssertEqual(controller.state, .idle)
     }
 
@@ -220,7 +247,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     func testConcurrentApprovalsQueueFIFOAndPairIndependently() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
         let envA = approvalEnvelope(command: "A")
         let envB = approvalEnvelope(command: "B")
 
@@ -245,7 +272,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     func testNotificationDuringDecideDoesNotClobberApproval() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
 
         let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
         try await waitUntil { surface.presentedApprovals.count == 1 }
@@ -264,7 +291,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     func testGreetingDoesNotClobberDecision() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
 
         let task = Task { await controller.requestDecision(for: approvalEnvelope()) }
         try await waitUntil { surface.presentedApprovals.count == 1 }
@@ -281,7 +308,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
         let root = try TemporaryDirectory()
         let socketPath = SocketPath(applicationSupportRoot: root.url)
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
         let host = BridgeServerHost(petController: controller, socketPath: socketPath)
 
         host.start()
@@ -302,11 +329,11 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(host.sessionStateSnapshot.sessionsByID[envelope.source.sessionID]?.phase, .completed)
     }
 
-    func testApprovalTimeoutRepliesDeferAndReturnsSessionToRunning() async throws {
+    func testApprovalDismissalRepliesDeferAndReturnsSessionToRunning() async throws {
         let root = try TemporaryDirectory()
         let socketPath = SocketPath(applicationSupportRoot: root.url)
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 0.05)
+        let controller = PetController(surface: surface)
         let host = BridgeServerHost(petController: controller, socketPath: socketPath)
 
         host.start()
@@ -314,7 +341,20 @@ final class NotificationBubbleFlowTests: XCTestCase {
         try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
 
         let envelope = approvalEnvelope()
-        let result = try await BridgeClient(socketPath: socketPath, readTimeout: 2).send(envelope)
+        let completed = LockedOptionalValue<BridgeResponseEnvelope>()
+        let responseTask = Task { () throws -> BridgeResponseEnvelope in
+            let response = try await BridgeClient(socketPath: socketPath, readTimeout: 2).send(envelope)
+            completed.set(response)
+            return response
+        }
+        try await waitUntil { surface.presentedApprovals.count == 1 }
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID[envelope.source.sessionID]?.phase, .waitingForApproval)
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(completed.value, "host should keep waiting until the card resolves")
+
+        surface.fireDecision(.defer)
+        let result = try await responseTask.value
 
         XCTAssertEqual(result.requestId, envelope.requestId)
         XCTAssertEqual(result.response, .defer)
@@ -322,23 +362,15 @@ final class NotificationBubbleFlowTests: XCTestCase {
     }
 
     func testLivenessSweepReapsSessionAfterTwoMisses() async throws {
-        let root = try TemporaryDirectory()
-        let socketPath = SocketPath(applicationSupportRoot: root.url)
         let surface = FakePetSurface()
         let controller = PetController(surface: surface, greetDuration: 10)
         let host = BridgeServerHost(
             petController: controller,
-            socketPath: socketPath,
             liveSessionProvider: { _ in [] },
             livenessInterval: 60
         )
 
-        host.start()
-        defer { host.stop() }
-        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
-
-        try await BridgeClient(socketPath: socketPath).sendOneWay(sessionStartEnvelope())
-        try await waitUntil { host.sessionStateSnapshot.sessionsByID["session-full"] != nil }
+        host.applyForTesting(sessionStartEnvelope().agentEvent!)
 
         await host.runLivenessSweepOnce()
         XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["session-full"]?.processNotSeenCount, 1)
@@ -468,7 +500,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     func testQuestionEntersDecideAndPresentsCard() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
 
         let task = Task { await controller.requestDecision(for: questionEnvelope()) }
         try await waitUntil { surface.presentedQuestions.count == 1 }
@@ -483,7 +515,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     func testQuestionSubmitResolvesWithPairedAnswer() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
 
         let task = Task { await controller.requestDecision(for: questionEnvelope()) }
         try await waitUntil { surface.presentedQuestions.count == 1 }
@@ -502,7 +534,6 @@ final class NotificationBubbleFlowTests: XCTestCase {
         var jumped: [JumpTarget] = []
         let controller = PetController(
             surface: surface,
-            decisionTimeout: 10,
             terminalJump: { jumped.append($0) }
         )
         let target = JumpTarget(terminalApp: "Ghostty", terminalSessionID: "ghostty-1")
@@ -519,13 +550,26 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(response, .question(answer))
     }
 
-    func testUnansweredQuestionTimesOutToDefer() async {
+    func testUnansweredQuestionWaitsUntilUserSubmits() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 0.05)
+        let controller = PetController(surface: surface)
 
-        let response = await controller.requestDecision(for: questionEnvelope())
+        let completed = LockedOptionalValue<BridgeResponse>()
+        let task = Task { () -> BridgeResponse in
+            let response = await controller.requestDecision(for: questionEnvelope())
+            completed.set(response)
+            return response
+        }
+        try await waitUntil { surface.presentedQuestions.count == 1 }
+        try await Task.sleep(nanoseconds: 100_000_000)
 
-        XCTAssertEqual(response, .defer)
+        XCTAssertNil(completed.value, "question should not auto-defer on an App-side timeout")
+        XCTAssertEqual(controller.state, .decide)
+
+        let answer = QuestionAnswer(answers: ["Database": "SQLite"])
+        surface.fireDecision(.question(answer))
+        let response = await task.value
+        XCTAssertEqual(response, .question(answer))
         XCTAssertEqual(controller.state, .idle)
     }
 
@@ -556,7 +600,7 @@ final class NotificationBubbleFlowTests: XCTestCase {
 
     func testTerminalApprovalResolvesAsDeferOnHandleInTerminal() async throws {
         let surface = FakePetSurface()
-        let controller = PetController(surface: surface, decisionTimeout: 10)
+        let controller = PetController(surface: surface)
 
         let task = Task { await controller.requestDecision(for: terminalApprovalEnvelope()) }
         try await waitUntil { surface.presentedApprovals.count == 1 }
@@ -576,7 +620,6 @@ final class NotificationBubbleFlowTests: XCTestCase {
         var jumped: [JumpTarget] = []
         let controller = PetController(
             surface: surface,
-            decisionTimeout: 10,
             terminalJump: { jumped.append($0) }
         )
         let target = JumpTarget(terminalApp: "VS Code", workingDirectory: "/tmp/VibePet")
@@ -851,7 +894,6 @@ private final class FakePetSurface: PetSurface {
     struct PresentedApproval {
         let content: ApprovalContent
         let source: SourceInfo
-        let timeout: TimeInterval
         let pendingCount: Int
         let onJump: ((JumpTarget) -> Void)?
     }
@@ -859,13 +901,13 @@ private final class FakePetSurface: PetSurface {
     struct PresentedQuestion {
         let content: QuestionContent
         let source: SourceInfo
-        let timeout: TimeInterval
         let pendingCount: Int
         let onJump: ((JumpTarget) -> Void)?
     }
 
     var petFrame: CGRect? = CGRect(x: 800, y: 0, width: 120, height: 120)
     var visibleFrame: CGRect = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    var selectedDashboardSessionID: String?
 
     private(set) var lastActivity: PetActivity?
     private(set) var presentedBubbles: [PresentedBubble] = []
@@ -881,6 +923,10 @@ private final class FakePetSurface: PetSurface {
     func renderPet(asset: PetAsset?, activity: PetActivity) {
         lastActivity = activity
     }
+
+    func showPetSwitchTooltip(name: String) {}
+
+    func updateDashboardContent() {}
 
     func presentBubble(
         content: BubbleContent,
@@ -910,7 +956,6 @@ private final class FakePetSurface: PetSurface {
         content: ApprovalContent,
         source: SourceInfo,
         placement: BubbleAnchor.Placement,
-        timeout: TimeInterval,
         pendingCount: Int,
         onJump: @escaping (JumpTarget) -> Void,
         onDecision: @escaping (BridgeResponse) -> Void
@@ -919,7 +964,6 @@ private final class FakePetSurface: PetSurface {
             PresentedApproval(
                 content: content,
                 source: source,
-                timeout: timeout,
                 pendingCount: pendingCount,
                 onJump: onJump
             )
@@ -932,7 +976,6 @@ private final class FakePetSurface: PetSurface {
         content: QuestionContent,
         source: SourceInfo,
         placement: BubbleAnchor.Placement,
-        timeout: TimeInterval,
         pendingCount: Int,
         onJump: @escaping (JumpTarget) -> Void,
         onAnswer: @escaping (BridgeResponse) -> Void
@@ -941,7 +984,6 @@ private final class FakePetSurface: PetSurface {
             PresentedQuestion(
                 content: content,
                 source: source,
-                timeout: timeout,
                 pendingCount: pendingCount,
                 onJump: onJump
             )

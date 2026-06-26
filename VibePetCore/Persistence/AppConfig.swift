@@ -3,7 +3,6 @@ import Foundation
 public struct AppConfig: Codable, Equatable, Sendable {
     public let activePetID: String?
     public let enabledTools: [ToolKind]
-    public let decisionTimeoutSeconds: TimeInterval
     public let activeGeneratorID: String
     public let petPosition: PetPosition
     public let hasCompletedOnboarding: Bool
@@ -11,7 +10,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public static let `default` = AppConfig(
         activePetID: nil,
         enabledTools: [.claudeCode, .codex],
-        decisionTimeoutSeconds: 20,
         activeGeneratorID: "local-cutout",
         petPosition: PetPosition(x: 24, y: 24, screenWidth: 0, screenHeight: 0),
         hasCompletedOnboarding: false
@@ -29,14 +27,12 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public init(
         activePetID: String?,
         enabledTools: [ToolKind],
-        decisionTimeoutSeconds: TimeInterval,
         activeGeneratorID: String,
         petPosition: PetPosition,
         hasCompletedOnboarding: Bool = false
     ) {
         self.activePetID = activePetID
         self.enabledTools = enabledTools
-        self.decisionTimeoutSeconds = decisionTimeoutSeconds
         self.activeGeneratorID = activeGeneratorID
         self.petPosition = petPosition
         self.hasCompletedOnboarding = hasCompletedOnboarding
@@ -46,10 +42,19 @@ public struct AppConfig: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         activePetID = try container.decodeIfPresent(String.self, forKey: .activePetID)
         enabledTools = try container.decode([ToolKind].self, forKey: .enabledTools)
-        decisionTimeoutSeconds = try container.decode(TimeInterval.self, forKey: .decisionTimeoutSeconds)
+        _ = try container.decodeIfPresent(TimeInterval.self, forKey: .decisionTimeoutSeconds)
         activeGeneratorID = try container.decode(String.self, forKey: .activeGeneratorID)
         petPosition = try container.decode(PetPosition.self, forKey: .petPosition)
         hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(activePetID, forKey: .activePetID)
+        try container.encode(enabledTools, forKey: .enabledTools)
+        try container.encode(activeGeneratorID, forKey: .activeGeneratorID)
+        try container.encode(petPosition, forKey: .petPosition)
+        try container.encode(hasCompletedOnboarding, forKey: .hasCompletedOnboarding)
     }
 
     /// Returns a copy with the given fields overridden; unspecified fields are
@@ -59,7 +64,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public func with(
         activePetID: String?? = nil,
         enabledTools: [ToolKind]? = nil,
-        decisionTimeoutSeconds: TimeInterval? = nil,
         activeGeneratorID: String? = nil,
         petPosition: PetPosition? = nil,
         hasCompletedOnboarding: Bool? = nil
@@ -67,7 +71,6 @@ public struct AppConfig: Codable, Equatable, Sendable {
         AppConfig(
             activePetID: activePetID ?? self.activePetID,
             enabledTools: enabledTools ?? self.enabledTools,
-            decisionTimeoutSeconds: decisionTimeoutSeconds ?? self.decisionTimeoutSeconds,
             activeGeneratorID: activeGeneratorID ?? self.activeGeneratorID,
             petPosition: petPosition ?? self.petPosition,
             hasCompletedOnboarding: hasCompletedOnboarding ?? self.hasCompletedOnboarding

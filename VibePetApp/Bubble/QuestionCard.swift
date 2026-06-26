@@ -7,20 +7,17 @@ import VibePetCore
 /// each showing `label` + a muted `detail` line; the appended "其他" (`allowsFreeform`)
 /// option reveals a text field when selected. Submit (`⌘↩`) collects a `QuestionAnswer`
 /// keyed by each item's `header`, freeform text inlined into the answer value. The
-/// card owns a visual countdown that fails open (`.defer`)
-/// at zero; the controller keeps an authoritative backstop, and `onAnswer` is
-/// idempotent upstream so whichever fires first wins.
+/// card waits for explicit submission; dismissal/fail-open is owned by the surrounding
+/// surface and hook runtime.
 struct QuestionCard: View {
     let content: QuestionContent
     let source: SourceInfo
     var tailEdge: SpeechBubble.TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
-    let timeout: TimeInterval
     var onJump: (JumpTarget) -> Void = { _ in }
     var onAnswer: (BridgeResponse) -> Void = { _ in }
 
     @ObservedObject var presentation: ApprovalPresentation
-    @State private var remaining: TimeInterval
     /// header → selected option labels (a set so multi-select is uniform; single
     /// select keeps at most one).
     @State private var selections: [String: Set<String>] = [:]
@@ -33,12 +30,29 @@ struct QuestionCard: View {
         }
     }
 
+    static func hasCompleteSelection(
+        questions: [QuestionItem],
+        selections: [String: Set<String>],
+        freeformText: [String: String]
+    ) -> Bool {
+        guard !questions.isEmpty else { return false }
+        return questions.allSatisfy { item in
+            guard !(selections[item.header]?.isEmpty ?? true) else { return false }
+            let chosen = item.options.filter { selections[item.header]?.contains($0.label) ?? false }
+            return chosen.allSatisfy { option in
+                guard option.allowsFreeform else { return true }
+                return !(freeformText[item.header] ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+            }
+        }
+    }
+
     init(
         content: QuestionContent,
         source: SourceInfo,
         tailEdge: SpeechBubble.TailEdge = .bottom,
         tailOffsetX: CGFloat = 40,
-        timeout: TimeInterval,
         presentation: ApprovalPresentation,
         onJump: @escaping (JumpTarget) -> Void = { _ in },
         onAnswer: @escaping (BridgeResponse) -> Void = { _ in }
@@ -47,21 +61,19 @@ struct QuestionCard: View {
         self.source = source
         self.tailEdge = tailEdge
         self.tailOffsetX = tailOffsetX
-        self.timeout = timeout
         self.presentation = presentation
         self.onJump = onJump
         self.onAnswer = onAnswer
-        _remaining = State(initialValue: timeout)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            Divider().overlay(BubbleTheme.separator)
             questionsBody
             footer
         }
         .padding(BubbleTheme.padding)
-        .padding(tailEdge == .bottom ? .bottom : .top, BubbleTheme.tailSize.height)
         .frame(minWidth: BubbleTheme.minWidth, maxWidth: BubbleTheme.maxWidth, alignment: .leading)
         .background(bubbleBackground)
         .contentShape(
@@ -75,7 +87,6 @@ struct QuestionCard: View {
         .onTapGesture(count: 2) {
             Self.jumpBack(from: source, onJump: onJump)
         }
-        .task { await runCountdown() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(sourceLabel)：\(content.title)")
     }
@@ -156,7 +167,7 @@ struct QuestionCard: View {
                         if let detail = option.detail {
                             Text(detail)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(BubbleTheme.mutedText)
                         }
                     }
                 }
@@ -201,44 +212,37 @@ struct QuestionCard: View {
         )
     }
 
-    // MARK: - Footer (countdown + submit)
+    // MARK: - Footer (submit)
 
     private var footer: some View {
         HStack(spacing: 8) {
-            countdownLabel
+            pendingLabel
             Spacer(minLength: 6)
             Button("提交") { submit() }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
-                .disabled(!hasAnySelection)
+                .disabled(!hasCompleteSelection)
         }
         .font(.callout)
     }
 
-    private var countdownLabel: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "timer")
-            Text("\(Int(ceil(remaining)))s")
-            if presentation.pendingCount > 0 {
-                Text("· 还有 \(presentation.pendingCount) 个待处理")
-            }
+    @ViewBuilder
+    private var pendingLabel: some View {
+        if presentation.pendingCount > 0 {
+            Text("还有 \(presentation.pendingCount) 个待处理")
+                .font(.caption2)
+                .foregroundStyle(BubbleTheme.mutedText)
         }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
     }
 
-    /// Submit is enabled once every selected question yields a usable value: at
-    /// least one option chosen, and any chosen freeform ("其他") option has non-empty
-    /// text. Requires at least one question to be answered.
-    private var hasAnySelection: Bool {
-        let answered = content.questions.filter { !(selections[$0.header]?.isEmpty ?? true) }
-        guard !answered.isEmpty else { return false }
-        return answered.allSatisfy { item in
-            let chosen = item.options.filter { selections[item.header]?.contains($0.label) ?? false }
-            return chosen.allSatisfy { option in
-                !option.allowsFreeform || !trimmedFreeform(item.header).isEmpty
-            }
-        }
+    /// Submit is enabled only when every question yields a usable value: at least
+    /// one option chosen, and any chosen freeform ("其他") option has non-empty text.
+    private var hasCompleteSelection: Bool {
+        Self.hasCompleteSelection(
+            questions: content.questions,
+            selections: selections,
+            freeformText: freeformText
+        )
     }
 
     private func submit() {
@@ -272,18 +276,6 @@ struct QuestionCard: View {
         (freeformText[header] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // MARK: - Countdown (visual; fails open at zero)
-
-    private func runCountdown() async {
-        let tick = 0.1
-        while remaining > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(tick * 1_000_000_000))
-            if Task.isCancelled { return }
-            remaining = max(0, remaining - tick)
-        }
-        onAnswer(.defer)
-    }
-
     // MARK: - Background + tail
 
     private var bubbleBackground: some View {
@@ -294,6 +286,7 @@ struct QuestionCard: View {
             tailSize: BubbleTheme.tailSize
         )
         .fill(BubbleTheme.background)
+        .shadow(color: Color.black.opacity(0.22), radius: 14, y: 8)
         .overlay(
             BubbleShape(
                 cornerRadius: BubbleTheme.cornerRadius,

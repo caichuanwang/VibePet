@@ -4,11 +4,10 @@ import VibePetCore
 
 /// The interactive approval bubble for the `decide` state (technical design
 /// §5.3.3). Three sections: a header (source + risk), a compact `ActionPreview`
-/// body, and a footer (countdown + buttons). Risk drives coloring and the default
+/// body, and a footer with action buttons. Risk drives coloring and the default
 /// focus — `.high` focuses "拒绝" so allowing is always a deliberate click. The
-/// card owns a visual countdown that fails open (`.defer`) at zero; the controller
-/// keeps an authoritative backstop timer as well, and `onDecision` is idempotent
-/// upstream so whichever fires first wins.
+/// card waits for a user decision; dismissal/fail-open is owned by the surrounding
+/// surface and hook runtime.
 struct ApprovalCard: View {
     enum Field {
         case deny
@@ -41,12 +40,10 @@ struct ApprovalCard: View {
     let source: SourceInfo
     var tailEdge: SpeechBubble.TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
-    let timeout: TimeInterval
     var onJump: (JumpTarget) -> Void = { _ in }
     var onDecision: (BridgeResponse) -> Void = { _ in }
 
     @ObservedObject var presentation: ApprovalPresentation
-    @State private var remaining: TimeInterval
     @FocusState private var focus: Field?
 
     init(
@@ -54,7 +51,6 @@ struct ApprovalCard: View {
         source: SourceInfo,
         tailEdge: SpeechBubble.TailEdge = .bottom,
         tailOffsetX: CGFloat = 40,
-        timeout: TimeInterval,
         presentation: ApprovalPresentation,
         onJump: @escaping (JumpTarget) -> Void = { _ in },
         onDecision: @escaping (BridgeResponse) -> Void = { _ in }
@@ -63,21 +59,19 @@ struct ApprovalCard: View {
         self.source = source
         self.tailEdge = tailEdge
         self.tailOffsetX = tailOffsetX
-        self.timeout = timeout
         self.presentation = presentation
         self.onJump = onJump
         self.onDecision = onDecision
-        _remaining = State(initialValue: timeout)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            Divider().overlay(BubbleTheme.separator)
             previewBody
             footer
         }
         .padding(BubbleTheme.padding)
-        .padding(tailEdge == .bottom ? .bottom : .top, BubbleTheme.tailSize.height)
         .frame(minWidth: BubbleTheme.minWidth, maxWidth: BubbleTheme.maxWidth, alignment: .leading)
         .background(bubbleBackground)
         .contentShape(
@@ -91,7 +85,6 @@ struct ApprovalCard: View {
         .onTapGesture(count: 2) {
             Self.jumpBack(from: source, onJump: onJump)
         }
-        .task { await runCountdown() }
         .onAppear { focus = content.risk == .high ? .deny : .allow }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(sourceLabel)：\(content.title)，\(BubbleTheme.riskLabel(content.risk))")
@@ -162,13 +155,13 @@ struct ApprovalCard: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)
-                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                .background(BubbleTheme.fieldBackground, in: RoundedRectangle(cornerRadius: BubbleTheme.innerCornerRadius))
         case let .fileChange(path, added, removed):
             VStack(alignment: .leading, spacing: 2) {
                 Text(path).font(BubbleTheme.monoFont).lineLimit(1).truncationMode(.middle)
                 Text("+\(added) −\(removed)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BubbleTheme.mutedText)
             }
         case let .fileRead(path):
             Text(path).font(BubbleTheme.monoFont).lineLimit(2).truncationMode(.middle)
@@ -186,14 +179,14 @@ struct ApprovalCard: View {
         return lines.prefix(3).joined(separator: "\n") + "\n…"
     }
 
-    // MARK: - Footer (countdown + buttons)
+    // MARK: - Footer (buttons)
 
     @ViewBuilder
     private var footer: some View {
         switch Self.footerMode(for: content) {
         case .decision:
             HStack(spacing: 8) {
-                countdownLabel
+                pendingLabel
                 Spacer(minLength: 6)
                 buttons
             }
@@ -209,9 +202,9 @@ struct ApprovalCard: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("此请求需在终端继续处理")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BubbleTheme.mutedText)
             HStack(spacing: 8) {
-                countdownLabel
+                pendingLabel
                 Spacer(minLength: 6)
                 Button("回终端处理") { handleInTerminal() }
                     .keyboardShortcut(.defaultAction)
@@ -240,16 +233,13 @@ struct ApprovalCard: View {
         }
     }
 
-    private var countdownLabel: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "timer")
-            Text("\(Int(ceil(remaining)))s")
-            if presentation.pendingCount > 0 {
-                Text("· 还有 \(presentation.pendingCount) 个待处理")
-            }
+    @ViewBuilder
+    private var pendingLabel: some View {
+        if presentation.pendingCount > 0 {
+            Text("还有 \(presentation.pendingCount) 个待处理")
+                .font(.caption2)
+                .foregroundStyle(BubbleTheme.mutedText)
         }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
     }
 
     private var buttons: some View {
@@ -258,38 +248,24 @@ struct ApprovalCard: View {
                 .keyboardShortcut(.cancelAction)
                 .focused($focus, equals: .deny)
                 .buttonStyle(.bordered)
-                .tint(content.risk == .high ? .red : nil)
-
+            Button(content.allowLabel) { decide(.approval(.allowOnce)) }
+                .keyboardShortcut(.defaultAction)
+                .focused($focus, equals: .allow)
+                .buttonStyle(.borderedProminent)
+                .tint(content.risk == .high ? .gray : .accentColor)
             if let always = content.alwaysAllow {
                 Button(always.label) {
                     decide(.approval(.allowAlways(scopeHint: always.scopeHint)))
                 }
                 .buttonStyle(.bordered)
             }
-
-            Button(content.allowLabel) { decide(.approval(.allowOnce)) }
-                .keyboardShortcut(.defaultAction)
-                .focused($focus, equals: .allow)
-                .buttonStyle(.borderedProminent)
-                .tint(content.risk == .high ? .gray : .accentColor)
         }
-        .font(.callout)
     }
+
+    // MARK: - Decision
 
     private func decide(_ response: BridgeResponse) {
         onDecision(response)
-    }
-
-    // MARK: - Countdown (visual; fails open at zero)
-
-    private func runCountdown() async {
-        let tick = 0.1
-        while remaining > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(tick * 1_000_000_000))
-            if Task.isCancelled { return }
-            remaining = max(0, remaining - tick)
-        }
-        onDecision(.defer)
     }
 
     // MARK: - Background + tail
@@ -302,6 +278,7 @@ struct ApprovalCard: View {
             tailSize: BubbleTheme.tailSize
         )
         .fill(BubbleTheme.background)
+        .shadow(color: Color.black.opacity(0.22), radius: 14, y: 8)
         .overlay(
             BubbleShape(
                 cornerRadius: BubbleTheme.cornerRadius,

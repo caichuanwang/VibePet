@@ -20,6 +20,7 @@ final class BridgeServerHost {
     private let socketPath: SocketPath
     private let manifestStore: InstallManifestStore
     private let liveSessionProvider: @Sendable (SessionState) async -> Set<String>
+    private let activeSessionProvider: @Sendable () async -> [ActiveAgentSession]
     private let livenessInterval: TimeInterval
     private let terminalJumpResolver: TerminalJumpTargetResolver
     private let onSessionStateChange: @MainActor (SessionState) -> Void
@@ -47,6 +48,11 @@ final class BridgeServerHost {
         liveSessionProvider: @escaping @Sendable (SessionState) async -> Set<String> = {
             await AgentProcessLiveness.liveSessionIDs(in: $0)
         },
+        activeSessionProvider: @escaping @Sendable () async -> [ActiveAgentSession] = {
+            await Task.detached(priority: .utility) {
+                ActiveAgentProcessDiscovery().discover()
+            }.value
+        },
         livenessInterval: TimeInterval = 5,
         terminalJumpResolver: TerminalJumpTargetResolver = TerminalJumpTargetResolver(),
         onSessionStateChange: @escaping @MainActor (SessionState) -> Void = { _ in }
@@ -56,6 +62,7 @@ final class BridgeServerHost {
         self.manifestStore = manifestStore
             ?? InstallManifestStore(applicationSupportRoot: socketPath.applicationSupportRoot)
         self.liveSessionProvider = liveSessionProvider
+        self.activeSessionProvider = activeSessionProvider
         self.livenessInterval = livenessInterval
         self.terminalJumpResolver = terminalJumpResolver
         self.onSessionStateChange = onSessionStateChange
@@ -115,6 +122,9 @@ final class BridgeServerHost {
         self.server = server
 
         startLivenessSweep()
+        Task { @MainActor in
+            await runLivenessSweepOnce()
+        }
 
         Task {
             do {
@@ -141,6 +151,7 @@ final class BridgeServerHost {
     }
 
     func runLivenessSweepOnce() async {
+        importActiveSessions(await activeSessionProvider())
         let aliveSessionIDs = await liveSessionProvider(sessionState)
         sessionState.markProcessLiveness(aliveSessionIDs: aliveSessionIDs)
         let visibleSessions = sessionState.visibleSessions
@@ -157,6 +168,26 @@ final class BridgeServerHost {
         }
         sessionState.removeInvisibleSessions()
         publishSessionState()
+    }
+
+    private func importActiveSessions(_ activeSessions: [ActiveAgentSession]) {
+        for activeSession in activeSessions where sessionState.sessionsByID[activeSession.id] == nil {
+            let now = Date.now
+            sessionState.upsertDiscoveredSession(AgentSession(
+                id: activeSession.id,
+                title: activeSession.title,
+                tool: activeSession.tool,
+                phase: .completed,
+                summary: activeSession.summary,
+                updatedAt: now,
+                firstSeenAt: now,
+                jumpTarget: activeSession.jumpTarget,
+                isError: false,
+                isSessionEnded: false,
+                isProcessAlive: true,
+                processNotSeenCount: 0
+            ))
+        }
     }
 
     private func startLivenessSweep() {

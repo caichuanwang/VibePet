@@ -16,6 +16,10 @@ final class PetWindowSurface: PetSurface {
     private var bubbleWindow: NSWindow?
     private var approvalPresentation: ApprovalPresentation?
     private var badgeWindow: NSWindow?
+    private var petSwitchTooltipWindow: NSWindow?
+    private var lastRenderedPetSlug: String?
+    weak var dashboardController: SessionDashboardWindowController?
+    var selectedDashboardSessionID: String?
 
     func bind(windowController: PetWindowController?) {
         self.windowController = windowController
@@ -38,12 +42,48 @@ final class PetWindowSurface: PetSurface {
 
     func renderPet(asset: PetAsset?, activity: PetActivity) {
         guard let windowController else { return }
+        let previousSlug = lastRenderedPetSlug
+        let newSlug = asset?.slug
+        let switchedPet = previousSlug != nil && previousSlug != newSlug
+        lastRenderedPetSlug = newSlug
+
+        let shouldFade = switchedPet && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         windowController.setContent(PetView(asset: asset, activity: activity) { [weak windowController] frame in
             windowController?.setHitSprite(frame)
-        })
+        }, fade: shouldFade)
         if asset == nil {
             windowController.setHitSprite(nil)
         }
+    }
+
+    func showPetSwitchTooltip(name: String) {
+        guard let petFrame = windowController?.window?.frame else { return }
+        petSwitchTooltipWindow?.orderOut(nil)
+
+        let size = CGSize(width: max(96, min(180, CGFloat(name.count) * 9 + 32)), height: 30)
+        let frame = CGRect(
+            x: petFrame.midX - size.width / 2,
+            y: petFrame.maxY + 8,
+            width: size.width,
+            height: size.height
+        )
+
+        let window = BubbleWindow(contentRect: frame)
+        window.contentViewController = NSHostingController(rootView: PetSwitchTooltip(name: name))
+        window.setFrame(frame, display: true)
+        window.orderFront(nil)
+        petSwitchTooltipWindow = window
+
+        Task { @MainActor [weak self, weak window] in
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            guard self?.petSwitchTooltipWindow === window else { return }
+            window?.orderOut(nil)
+            self?.petSwitchTooltipWindow = nil
+        }
+    }
+
+    func updateDashboardContent() {
+        dashboardController?.refreshContent()
     }
 
     func presentBubble(
@@ -85,7 +125,6 @@ final class PetWindowSurface: PetSurface {
         content: ApprovalContent,
         source: SourceInfo,
         placement: BubbleAnchor.Placement,
-        timeout: TimeInterval,
         pendingCount: Int,
         onJump: @escaping (JumpTarget) -> Void,
         onDecision: @escaping (BridgeResponse) -> Void
@@ -105,7 +144,6 @@ final class PetWindowSurface: PetSurface {
                 source: source,
                 tailEdge: measuringEdge,
                 tailOffsetX: 0,
-                timeout: timeout,
                 presentation: presentation,
                 onJump: onJump,
                 onDecision: { _ in }
@@ -129,7 +167,6 @@ final class PetWindowSurface: PetSurface {
                 source: source,
                 tailEdge: tailEdge,
                 tailOffsetX: tailOffsetX,
-                timeout: timeout,
                 presentation: presentation,
                 onJump: onJump,
                 onDecision: onDecision
@@ -150,7 +187,6 @@ final class PetWindowSurface: PetSurface {
         content: QuestionContent,
         source: SourceInfo,
         placement: BubbleAnchor.Placement,
-        timeout: TimeInterval,
         pendingCount: Int,
         onJump: @escaping (JumpTarget) -> Void,
         onAnswer: @escaping (BridgeResponse) -> Void
@@ -168,7 +204,6 @@ final class PetWindowSurface: PetSurface {
                 source: source,
                 tailEdge: measuringEdge,
                 tailOffsetX: 0,
-                timeout: timeout,
                 presentation: presentation,
                 onJump: onJump,
                 onAnswer: { _ in }
@@ -191,7 +226,6 @@ final class PetWindowSurface: PetSurface {
                 source: source,
                 tailEdge: tailEdge,
                 tailOffsetX: tailOffsetX,
-                timeout: timeout,
                 presentation: presentation,
                 onJump: onJump,
                 onAnswer: onAnswer
@@ -266,6 +300,23 @@ private struct NotificationBadge: View {
             .padding(.horizontal, 4)
             .background(Color(nsColor: .systemRed), in: Capsule())
             .accessibilityLabel("\(count) 条待查看通知")
+    }
+}
+
+private struct PetSwitchTooltip: View {
+    let name: String
+
+    var body: some View {
+        Text(name)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .foregroundStyle(BubbleTheme.dashboardPrimaryText)
+            .background(BubbleTheme.dashboardCardBackground, in: Capsule())
+            .overlay(
+                Capsule().stroke(BubbleTheme.dashboardBorder, lineWidth: 1)
+            )
     }
 }
 

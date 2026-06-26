@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "9f8e7d6c5b4a3210",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "swift test"
+  },
+  "tool_response": {
+    "exit_code": 0
+  }
+}

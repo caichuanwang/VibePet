@@ -10,7 +10,6 @@ struct SettingsView: View {
 
     @State private var enabledClaude: Bool
     @State private var enabledCodex: Bool
-    @State private var decisionTimeout: Double
     @State private var launchAtLogin: Bool
     @State private var pets: [PetAsset] = []
     @State private var selectedPetSlug: String
@@ -23,7 +22,6 @@ struct SettingsView: View {
         let config = (try? configStore.read()) ?? .default
         _enabledClaude = State(initialValue: config.enabledTools.contains(.claudeCode))
         _enabledCodex = State(initialValue: config.enabledTools.contains(.codex))
-        _decisionTimeout = State(initialValue: config.decisionTimeoutSeconds)
         _launchAtLogin = State(initialValue: SMAppService.mainApp.status == .enabled)
         _selectedPetSlug = State(initialValue: config.activePetID ?? "")
     }
@@ -40,12 +38,6 @@ struct SettingsView: View {
             }
 
             Section("行为") {
-                VStack(alignment: .leading) {
-                    Text("决策超时：\(Int(decisionTimeout)) 秒")
-                    Slider(value: $decisionTimeout, in: 5...60, step: 1) { editing in
-                        if !editing { persistTimeout() }
-                    }
-                }
                 Toggle("开机自启", isOn: $launchAtLogin).onChange(of: launchAtLogin) { _, newValue in
                     setLaunchAtLogin(newValue)
                 }
@@ -93,10 +85,6 @@ struct SettingsView: View {
         update { $0.with(enabledTools: tools) }
     }
 
-    private func persistTimeout() {
-        update { $0.with(decisionTimeoutSeconds: decisionTimeout) }
-    }
-
     private func setLaunchAtLogin(_ enabled: Bool) {
         do {
             if enabled {
@@ -136,5 +124,16 @@ enum PetSelection {
             return current
         }
         return pets.first?.slug
+    }
+
+    static func next(current: String?, pets: [PetAsset]) -> String? {
+        guard pets.count >= 2 else {
+            return nil
+        }
+        guard let current, let index = pets.firstIndex(where: { $0.slug == current }) else {
+            return pets.first?.slug
+        }
+        let nextIndex = pets.index(after: index)
+        return pets[nextIndex == pets.endIndex ? pets.startIndex : nextIndex].slug
     }
 }

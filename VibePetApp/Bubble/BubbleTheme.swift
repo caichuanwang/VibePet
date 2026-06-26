@@ -7,16 +7,28 @@ import VibePetCore
 enum BubbleTheme {
     static let minWidth: CGFloat = 240
     static let maxWidth: CGFloat = 380
-    static let cornerRadius: CGFloat = 14
+    static let cornerRadius: CGFloat = 8
+    static let innerCornerRadius: CGFloat = 6
     static let contentMaxHeight: CGFloat = 132 // ~6 lines before internal scroll
     static let padding: CGFloat = 12
     static let tailSize = CGSize(width: 18, height: 9)
 
-    static let background = Color(nsColor: .windowBackgroundColor)
-    static let border = Color.primary.opacity(0.12)
-    static let headerText = Color.secondary
-    static let bodyText = Color.primary
+    static let background = Color(red: 0.09, green: 0.10, blue: 0.12).opacity(0.94)
+    static let cardBackground = Color.white.opacity(0.07)
+    static let fieldBackground = Color.black.opacity(0.22)
+    static let border = Color.white.opacity(0.16)
+    static let separator = Color.white.opacity(0.10)
+    static let headerText = Color.white.opacity(0.62)
+    static let bodyText = Color.white.opacity(0.92)
+    static let mutedText = Color.white.opacity(0.54)
     static let errorAccent = Color(nsColor: .systemRed)
+    static let dashboardPanelTint = Color(nsColor: .black).opacity(0.42)
+    static let dashboardCardBackground = Color(nsColor: .controlBackgroundColor).opacity(0.18)
+    static let dashboardBorder = Color.white.opacity(0.14)
+    static let dashboardPrimaryText = Color.white.opacity(0.94)
+    static let dashboardSecondaryText = Color.white.opacity(0.64)
+    static let dashboardPillBackground = Color.white.opacity(0.10)
+    static let dashboardActivePillBackground = Color.white.opacity(0.20)
 
     static let headerFont = Font.caption2
     static let bodyFont = Font.callout
@@ -36,6 +48,21 @@ enum BubbleTheme {
         case .high: "高风险"
         case .medium: "中风险"
         case .low: "低风险"
+        }
+    }
+
+    static func dashboardStatusColor(_ status: SessionDashboardProjection.Status) -> Color {
+        switch status {
+        case .idle:
+            Color.secondary
+        case .running:
+            Color(nsColor: .systemGreen)
+        case .attention:
+            Color(nsColor: .systemOrange)
+        case .error:
+            Color(nsColor: .systemRed)
+        case .completed:
+            Color.secondary
         }
     }
 }

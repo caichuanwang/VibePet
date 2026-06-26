@@ -5,7 +5,6 @@ final class AppConfigWithTests: XCTestCase {
     private let base = AppConfig(
         activePetID: "pet-1",
         enabledTools: [.claudeCode],
-        decisionTimeoutSeconds: 20,
         activeGeneratorID: "local-cutout",
         petPosition: PetPosition(x: 1, y: 2, screenWidth: 800, screenHeight: 600),
         hasCompletedOnboarding: false
@@ -17,7 +16,6 @@ final class AppConfigWithTests: XCTestCase {
         // Everything else is carried over unchanged.
         XCTAssertEqual(updated.activePetID, base.activePetID)
         XCTAssertEqual(updated.enabledTools, base.enabledTools)
-        XCTAssertEqual(updated.decisionTimeoutSeconds, base.decisionTimeoutSeconds)
         XCTAssertEqual(updated.activeGeneratorID, base.activeGeneratorID)
         XCTAssertEqual(updated.petPosition, base.petPosition)
     }

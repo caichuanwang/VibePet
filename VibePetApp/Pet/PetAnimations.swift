@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import VibePetCore
 
 enum PetActivity: Equatable, Sendable {
@@ -15,6 +16,19 @@ enum PetActivity: Equatable, Sendable {
         case .waiting: .waiting
         case .waving: .waving
         case .failed: .failed
+        }
+    }
+
+    var statusIndicatorColor: Color {
+        switch self {
+        case .running:
+            Color(nsColor: .systemGreen)
+        case .waiting:
+            Color(nsColor: .systemOrange)
+        case .failed:
+            Color(nsColor: .systemRed)
+        case .idle, .waving:
+            Color.white.opacity(0.42)
         }
     }
 }

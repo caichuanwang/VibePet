@@ -48,4 +48,18 @@ final class ScreenSnapTests: XCTestCase {
         XCTAssertEqual(clamped.origin.x, 680)
         XCTAssertEqual(clamped.origin.y, 0)
     }
+
+    func testPressReleaseBelowDragThresholdIsClick() {
+        let start = CGPoint(x: 20, y: 20)
+        let current = CGPoint(x: 24, y: 23)
+
+        XCTAssertEqual(ScreenSnap.dragIntent(from: start, to: current), .click)
+    }
+
+    func testPressReleaseAtDragThresholdIsDrag() {
+        let start = CGPoint(x: 20, y: 20)
+        let current = CGPoint(x: 26, y: 28)
+
+        XCTAssertEqual(ScreenSnap.dragIntent(from: start, to: current), .drag)
+    }
 }

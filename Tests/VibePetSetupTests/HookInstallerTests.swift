@@ -96,6 +96,32 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertEqual(newer.status(tool: .claudeCode), .outdated)
     }
 
+    func testStatusOutdatedWhenManagedHookSetChangedAndInstallRewrites() throws {
+        let root = try TempRoot()
+        let codexDir = root.url.appendingPathComponent("codex", isDirectory: true)
+        let binaryPath = InstallPaths.hookBinaryURL(applicationSupportRoot: root.url).path
+        let writer = CodexConfigWriter(codexDirectory: codexDir, hookBinaryPath: binaryPath)
+        let installer = HookInstaller(applicationSupportRoot: root.url, writers: [writer])
+
+        _ = try installer.install(tool: .codex, hookBinarySource: try root.makeSourceBinary(contents: "hooks"))
+
+        let store = InstallManifestStore(applicationSupportRoot: root.url)
+        var manifest = store.read()
+        manifest.tools[ToolKind.codex.rawValue]?.writtenHooks = ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit"]
+        try store.write(manifest)
+
+        XCTAssertEqual(installer.status(tool: .codex), .outdated)
+
+        let record = try installer.install(tool: .codex, hookBinarySource: try root.makeSourceBinary(contents: "hooks"))
+        XCTAssertEqual(record.writtenHooks, writer.managedHookKeys)
+
+        let hooksData = try Data(contentsOf: codexDir.appendingPathComponent("hooks.json"))
+        let rootObject = try XCTUnwrap(try JSONSerialization.jsonObject(with: hooksData) as? [String: Any])
+        let hooks = try XCTUnwrap(rootObject["hooks"] as? [String: Any])
+        XCTAssertNotNil(hooks["PostToolUse"])
+        XCTAssertEqual(installer.status(tool: .codex), .installedNeedsTrust)
+    }
+
     func testRepairFixesDriftThatIdempotentInstallCannot() throws {
         let root = try TempRoot()
         let configURL = root.url.appendingPathComponent("claude/settings.json")

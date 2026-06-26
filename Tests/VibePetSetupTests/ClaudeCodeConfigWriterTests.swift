@@ -82,7 +82,7 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         }
     }
 
-    func testPreToolUseCarriesDecisionTimeoutAboveAppDeadlineButOthersDoNot() throws {
+    func testPreToolUseCarriesFiniteDecisionTimeoutButOthersDoNot() throws {
         let url = try emptyConfig()
         let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
 
@@ -91,11 +91,7 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         let hooks = try hooksObject(url)
         let preToolUseTimeout = try XCTUnwrap(vibePetTimeout(in: hooks, key: "PreToolUse"))
         XCTAssertEqual(preToolUseTimeout, ClaudeCodeConfigWriter.managedDecisionTimeout)
-        XCTAssertGreaterThan(
-            TimeInterval(preToolUseTimeout),
-            AppConfig.default.decisionTimeoutSeconds,
-            "PreToolUse timeout must exceed the App decision deadline so Claude does not preempt approval"
-        )
+        XCTAssertGreaterThan(preToolUseTimeout, 0, "PreToolUse timeout is the finite tool-side fail-open backstop")
         for key in managedHookKeys where key != "PreToolUse" {
             XCTAssertNil(vibePetTimeout(in: hooks, key: key), "\(key) is fire-and-forget and should not set a timeout")
         }

@@ -8,7 +8,7 @@ import XCTest
 /// idempotent; uninstall removes only VibePet's entries and the managed feature flag.
 final class CodexConfigWriterTests: XCTestCase {
     private let binaryPath = "/Users/dev/Library/Application Support/VibePet/bin/VibePetHooks"
-    private let managedHookKeys = ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit"]
+    private let managedHookKeys = ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit", "PostToolUse"]
 
     func testInstallWritesManagedHooksWithMarkerAndToolArg() throws {
         let dir = try tempCodexDir()
@@ -27,6 +27,17 @@ final class CodexConfigWriterTests: XCTestCase {
             XCTAssertTrue(command.contains(binaryPath))
             XCTAssertTrue(command.contains("--tool codex"), "command must select CodexAdapter")
         }
+    }
+
+    func testPostToolUseUsesNonBlockingTimeout() throws {
+        let dir = try tempCodexDir()
+        let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
+
+        try writer.install(arguments: ["--tool", "codex"])
+
+        let hooks = try hooksObject(dir)
+        let postToolUse = try XCTUnwrap(innerHooks(in: hooks, event: "PostToolUse").first)
+        XCTAssertEqual(postToolUse["timeout"] as? Int, CodexConfigWriter.stopTimeout)
     }
 
     func testQuotesBinaryPathForEveryManagedHook() throws {

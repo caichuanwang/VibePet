@@ -74,7 +74,7 @@ public struct CodexAdapter: ToolAdapter {
                 source: source,
                 agentEvent: makeAgentEvent(from: object, source: source)
             )
-        case "SessionStart", "UserPromptSubmit":
+        case "SessionStart", "UserPromptSubmit", "PostToolUse":
             let source = makeSource(from: object, env: env)
             guard let agentEvent = makeAgentEvent(from: object, source: source) else { return nil }
             return makeEnvelope(
@@ -294,7 +294,7 @@ public struct CodexAdapter: ToolAdapter {
                 summary: lifecycleSummary(for: event, object: object),
                 jumpTarget: source.jumpTarget
             )
-        case "UserPromptSubmit":
+        case "UserPromptSubmit", "PostToolUse":
             return .activityUpdated(
                 sessionID: sessionID,
                 timestamp: timestamp,
@@ -350,6 +350,8 @@ public struct CodexAdapter: ToolAdapter {
             return "Codex received a prompt"
         case "PermissionRequest":
             return "Codex needs approval"
+        case "PostToolUse":
+            return "Codex completed a tool"
         default:
             return "Codex activity"
         }

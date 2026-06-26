@@ -6,7 +6,7 @@ Define how `QuestionCard` renders `.question` content and collects a `QuestionAn
 
 ### Requirement: Question card renders each question item
 
-`QuestionCard` SHALL render a `.question` content's `QuestionContent` by showing the `title` (when non-empty) and, for each `QuestionItem`, its `prompt` followed by its `options`. Each `QuestionOption` SHALL display its `label` and, when present, its `detail` on a secondary muted line. The card SHALL also show the source header. When the source carries a jump target, double-clicking the non-control card body SHALL invoke the injected terminal jump action once without changing option, freeform input, submit, or countdown behavior.
+`QuestionCard` SHALL render a `.question` content's `QuestionContent` by showing the `title` (when non-empty) and, for each `QuestionItem`, its `prompt` followed by its `options`. Each `QuestionOption` SHALL display its `label` and, when present, its `detail` on a secondary muted line. The card SHALL also show the source header. When the source carries a jump target, double-clicking the non-control card body SHALL invoke the injected terminal jump action once without changing option, freeform input, or submit behavior.
 
 #### Scenario: Multi-question content renders every item
 
@@ -48,23 +48,24 @@ Define how `QuestionCard` renders `.question` content and collects a `QuestionAn
 
 ### Requirement: Submit collects a QuestionAnswer keyed by header
 
-`QuestionCard` SHALL provide a submit affordance (`⌘↩`) that resolves the card with `.question(QuestionAnswer)` whose `answers` map each item's `header` to one string value — single-select as the chosen label, multi-select as the chosen labels joined with `", "`, and a freeform ("其他") choice contributing the typed text in place of its label (matching how Claude Code's CLI inlines free text into the answer value). Submit SHALL be disabled until at least one question is answered. The terminal jump gesture SHALL NOT intercept submit controls or keyboard submission.
+`QuestionCard` SHALL provide a submit affordance (`⌘↩`) that resolves the card with `.question(QuestionAnswer)` whose `answers` map each item's `header` to one string value — single-select as the chosen label, multi-select as the chosen labels joined with `", "`, and a freeform ("其他") choice contributing the typed text in place of its label (matching how Claude Code's CLI inlines free text into the answer value). Submit SHALL be disabled until every question in the card is answered: each question MUST have at least one selected option, and any selected freeform ("其他") option MUST carry non-empty text, so a multi-topic `AskUserQuestion` can never be submitted with some topics left unanswered. The terminal jump gesture SHALL NOT intercept submit controls or keyboard submission.
 
 #### Scenario: Submit resolves with selected answers
 
-- **WHEN** the user has made a selection and triggers submit
-- **THEN** `QuestionCard` resolves with `.question(QuestionAnswer)` whose `answers` is keyed by each item's `header` and reflects the selection
+- **WHEN** the user has answered every question and triggers submit
+- **THEN** `QuestionCard` resolves with `.question(QuestionAnswer)` whose `answers` is keyed by each item's `header` and reflects every question's selection
+
+#### Scenario: Submit is disabled until all questions are answered
+
+- **WHEN** a card presents multiple questions and the user has answered only some of them
+- **THEN** the submit affordance remains disabled until each remaining question has a valid selection
+
+#### Scenario: Freeform selection requires text before submit
+
+- **WHEN** a selected option is the freeform ("其他") choice with empty text
+- **THEN** submit remains disabled until non-empty text is entered for that question
 
 #### Scenario: Submit is not replaced by jump gesture
 
 - **WHEN** a question card has a source jump target and the user activates submit with the button or `⌘↩`
 - **THEN** the card resolves with the question answer and does not invoke jump-back instead of submission
-
-### Requirement: Question card countdown fails open to defer
-
-`QuestionCard` SHALL run a decision countdown sourced from the configured decision timeout and SHALL resolve to `.defer` when the countdown elapses or the card is dismissed without a submission, so the tool falls back to its native prompt.
-
-#### Scenario: Countdown elapses without submission
-
-- **WHEN** the question card's countdown reaches zero before the user submits
-- **THEN** the card resolves to `.defer`

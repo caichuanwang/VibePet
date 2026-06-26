@@ -55,16 +55,31 @@ The pet position SHALL be computed relative to `NSScreen.main.visibleFrame` (exc
 
 ### Requirement: Free drag with soft edge snapping
 
-The pet SHALL be draggable to any location on screen. On `mouseUp`, the distance from the pet's bounding box to each of the four `visibleFrame` edges SHALL be measured; if the nearest edge distance is less than 40pt the pet SHALL animate-snap to that edge (inset 8pt) while preserving its coordinate along that edge (edge sliding), naturally settling into a corner when near two edges (technical design §5.1.1). This snapping geometry SHALL be implemented as UI-agnostic, unit-testable logic (`ScreenSnap`) that does not require AppKit/SwiftUI types.
+The pet SHALL be draggable to any location on screen. The pet window SHALL distinguish three pointer interactions on the pet body: a left press-and-release with pointer movement below a small drag threshold SHALL be treated as a click and SHALL emit an open-dashboard action; a left press with movement at or above the threshold SHALL be treated as a drag and SHALL move the pet; a right-click SHALL emit a cycle-pet action (see `pet-quick-switch`) and SHALL NOT move the pet. On `mouseUp` after a drag, the distance from the pet's bounding box to each of the four `visibleFrame` edges SHALL be measured; if the nearest edge distance is less than 40pt the pet SHALL animate-snap to that edge (inset 8pt) while preserving its coordinate along that edge (edge sliding), naturally settling into a corner when near two edges (technical design §5.1.1). This snapping geometry SHALL be implemented as UI-agnostic, unit-testable logic (`ScreenSnap`) that does not require AppKit/SwiftUI types. The click-versus-drag disambiguation SHALL NOT regress transparent-pixel passthrough.
+
+#### Scenario: Left click without drag opens the dashboard
+
+- **WHEN** the user presses and releases the left button on the pet body with movement below the drag threshold
+- **THEN** no drag/snap occurs and an open-dashboard action is emitted
+
+#### Scenario: Left drag moves the pet
+
+- **WHEN** the user presses the left button on the pet body and moves at or beyond the drag threshold before releasing
+- **THEN** the pet moves with the pointer and is treated as a drag, not a click
+
+#### Scenario: Right click cycles the pet without moving it
+
+- **WHEN** the user right-clicks the pet body
+- **THEN** a cycle-pet action is emitted and the pet position does not change
 
 #### Scenario: Release near an edge snaps to it
 
-- **WHEN** the pet is released with its nearest edge distance below 40pt
+- **WHEN** the pet is released after a drag with its nearest edge distance below 40pt
 - **THEN** it animates to that edge inset 8pt and keeps its position along the edge unchanged
 
 #### Scenario: Release away from all edges does not snap
 
-- **WHEN** the pet is released with all edge distances at or above 40pt
+- **WHEN** the pet is released after a drag with all edge distances at or above 40pt
 - **THEN** it stays at the released location without snapping
 
 #### Scenario: Snap math is testable without UI
@@ -85,3 +100,27 @@ The pet position SHALL always be clamped within `NSScreen.main.visibleFrame` (mu
 
 - **WHEN** the pet is moved and the app later restarts
 - **THEN** the pet reappears at the persisted position (clamped if `visibleFrame` changed)
+
+### Requirement: Persistent session status indicator
+
+The pet window SHALL render a small, always-visible status indicator dot anchored to a corner of the pet sprite, whose color reflects the aggregate session state derived by `PetController` / `SessionState`: green when one or more sessions are running, orange when any session requires attention (`waitingForApproval` / `waitingForAnswer`), and a muted/gray tone when idle (no live sessions). The indicator SHALL update reactively as session state changes and SHALL NOT intercept pointer events (it never alters the sprite hit mask or click routing).
+
+#### Scenario: Running sessions show a green dot
+
+- **WHEN** at least one visible session is in the `running` phase and none requires attention
+- **THEN** the status indicator renders in the running (green) color
+
+#### Scenario: Attention-needing session shows an orange dot
+
+- **WHEN** any session is `waitingForApproval` or `waitingForAnswer`
+- **THEN** the status indicator renders in the attention (orange) color regardless of other running sessions
+
+#### Scenario: Idle shows a muted dot
+
+- **WHEN** there are no live sessions
+- **THEN** the status indicator renders in the idle (muted/gray) tone
+
+#### Scenario: Indicator does not capture clicks
+
+- **WHEN** the user clicks on or near the status indicator over a transparent sprite pixel
+- **THEN** the click is routed exactly as it would be without the indicator (passthrough/hit behavior unchanged)

@@ -26,13 +26,10 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
 
     private let hookBinaryPath: String
 
-    /// Seconds Claude Code waits for the `PreToolUse` hook before killing it. VibePet's
-    /// approval window is governed by the App countdown (`decisionTimeoutSeconds`) and
-    /// the CLI read deadline; Claude's per-hook `timeout` only needs to be larger than
-    /// both so it never preempts them. Without it Claude's 60s default would cap any
-    /// approval window set above ~55s. The CLI's connect/read deadlines remain the real
-    /// fail-open backstop, so a large value here cannot cause a hang.
-    static let managedDecisionTimeout = 86_400
+    /// Seconds Claude Code waits for the blocking `PreToolUse` hook before killing it.
+    /// With no App-side decision countdown, this tool-side timeout is the finite
+    /// fail-open backstop for unanswered decisions.
+    public static let managedDecisionTimeout = 86_400
 
     public init(configURL: URL? = nil, hookBinaryPath: String? = nil) {
         self.configURL = configURL ?? FileManager.default.homeDirectoryForCurrentUser

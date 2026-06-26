@@ -1,5 +1,6 @@
 @testable import VibePetApp
 import AppKit
+import VibePetCore
 import XCTest
 
 final class OverlayWindowBehaviorTests: XCTestCase {
@@ -26,6 +27,30 @@ final class OverlayWindowBehaviorTests: XCTestCase {
     func testBubbleOverlayCollectionBehaviorMatchesPetWindow() {
         assertStationaryAllSpaces(PetWindowSurface.bubbleOverlayCollectionBehavior)
         XCTAssertEqual(PetWindowSurface.bubbleOverlayCollectionBehavior, PetWindow.overlayCollectionBehavior)
+    }
+
+    @MainActor
+    func testDashboardPanelUsesStationaryNonactivatingOverlay() {
+        let controller = SessionDashboardWindowController(
+            state: SessionState(),
+            activePetName: "Pixel",
+            petFrame: CGRect(x: 0, y: 0, width: 120, height: 120),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            cardProvider: { _ in nil },
+            onSelectedSessionChanged: { _ in }
+        )
+
+        guard let panel = controller.window as? NSPanel else {
+            XCTFail("dashboard should be hosted in an NSPanel")
+            return
+        }
+        XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+        XCTAssertTrue(panel.isFloatingPanel)
+        XCTAssertEqual(panel.level, .floating)
+        XCTAssertTrue(panel.canBecomeKey)
+        XCTAssertFalse(panel.canBecomeMain)
+        XCTAssertFalse(panel.hidesOnDeactivate)
+        assertStationaryAllSpaces(panel.collectionBehavior)
     }
 
     private func assertStationaryAllSpaces(

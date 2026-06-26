@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VibePet Session Panel Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #151515;
+      --panel: rgba(33, 35, 37, 0.88);
+      --panel-2: rgba(255, 255, 255, 0.07);
+      --panel-3: rgba(255, 255, 255, 0.11);
+      --stroke: rgba(255, 255, 255, 0.14);
+      --text: rgba(255, 255, 255, 0.94);
+      --muted: rgba(255, 255, 255, 0.62);
+      --soft: rgba(255, 255, 255, 0.42);
+      --green: #42d889;
+      --yellow: #ffcb47;
+      --red: #ff6b68;
+      --blue: #74a7ff;
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.46);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 28% 18%, rgba(116, 167, 255, 0.12), transparent 26%),
+        radial-gradient(circle at 76% 74%, rgba(66, 216, 137, 0.10), transparent 25%),
+        #0e0f10;
+      color: var(--text);
+    }
+
+    .stage {
+      width: min(1060px, calc(100vw - 40px));
+      display: grid;
+      gap: 16px;
+    }
+
+    .notes {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .note {
+      min-height: 70px;
+      padding: 12px 14px;
+      border: 1px solid var(--stroke);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.055);
+    }
+
+    .note strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .window {
+      width: 920px;
+      height: 520px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(37, 39, 41, 0.96), rgba(24, 25, 26, 0.96));
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      min-height: 58px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--stroke);
+      background: rgba(255, 255, 255, 0.045);
+    }
+
+    .title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .pet {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.09);
+      border: 1px solid var(--stroke);
+      font-size: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.2;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .attention-banner {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      border: 1px solid rgba(255, 203, 71, 0.36);
+      border-radius: 8px;
+      background: rgba(255, 203, 71, 0.12);
+      color: #ffe49a;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .banner-dot,
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: var(--yellow);
+    }
+
+    .shell {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 310px 1fr;
+    }
+
+    .sidebar {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      border-right: 1px solid var(--stroke);
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--stroke);
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 9px 8px;
+      border-radius: 8px;
+      background: var(--panel-2);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .metric-value {
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 750;
+      line-height: 1.15;
+    }
+
+    .metric-label {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .session-list {
+      min-height: 0;
+      overflow: hidden;
+      padding: 10px;
+    }
+
+    .section-label {
+      margin: 4px 4px 8px;
+      color: var(--soft);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .session-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 9px;
+      align-items: center;
+      min-height: 66px;
+      margin-bottom: 8px;
+      padding: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    .session-row.active {
+      border-color: rgba(116, 167, 255, 0.56);
+      background: rgba(116, 167, 255, 0.14);
+    }
+
+    .session-row.needs {
+      border-color: rgba(255, 203, 71, 0.42);
+      background: rgba(255, 203, 71, 0.10);
+    }
+
+    .session-row.new::after {
+      content: "new";
+      position: absolute;
+      top: 7px;
+      right: 8px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      color: #b8d0ff;
+      background: rgba(116, 167, 255, 0.17);
+      border: 1px solid rgba(116, 167, 255, 0.30);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .status-dot.running {
+      background: var(--green);
+    }
+
+    .status-dot.needs {
+      background: var(--yellow);
+      box-shadow: 0 0 0 4px rgba(255, 203, 71, 0.11);
+    }
+
+    .status-dot.error {
+      background: var(--red);
+    }
+
+    .row-main {
+      min-width: 0;
+    }
+
+    .row-title {
+      overflow: hidden;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .row-sub {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .pill {
+      max-width: 92px;
+      overflow: hidden;
+      padding: 3px 6px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .count-pill {
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: #ffe49a;
+      background: rgba(255, 203, 71, 0.13);
+      border: 1px solid rgba(255, 203, 71, 0.30);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .detail {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      padding: 14px;
+      background: rgba(0, 0, 0, 0.10);
+    }
+
+    .detail-header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: start;
+      padding-bottom: 12px;
+    }
+
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .back {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--panel-2);
+      border: 1px solid var(--stroke);
+      color: var(--text);
+      font-size: 16px;
+    }
+
+    .detail-title {
+      margin-top: 8px;
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 760;
+      line-height: 1.25;
+    }
+
+    .detail-subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .detail-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-button {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--panel-2);
+      border: 1px solid var(--stroke);
+      color: var(--text);
+      font-size: 15px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      min-width: 0;
+      overflow: hidden;
+      padding-bottom: 12px;
+    }
+
+    .tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      max-width: 136px;
+      min-height: 30px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--panel-2);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .tab.active {
+      color: var(--text);
+      background: rgba(116, 167, 255, 0.16);
+      border-color: rgba(116, 167, 255, 0.34);
+    }
+
+    .tab span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .content-card {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+      border: 1px solid var(--stroke);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+    }
+
+    .state-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .locked-note {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .activity {
+      padding: 14px;
+      overflow: auto;
+    }
+
+    .message {
+      margin-bottom: 10px;
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.075);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+    }
+
+    .message-title {
+      margin-bottom: 5px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .message-body {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .attention-card {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(255, 203, 71, 0.10);
+      border: 1px solid rgba(255, 203, 71, 0.28);
+    }
+
+    .attention-card .message-title {
+      color: #ffe49a;
+    }
+
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.10);
+    }
+
+    .footer-hint {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .primary-action {
+      min-height: 30px;
+      padding: 6px 12px;
+      border: 0;
+      border-radius: 8px;
+      color: #151515;
+      background: #ffe08a;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    @media (max-width: 980px) {
+      .window {
+        width: min(920px, calc(100vw - 32px));
+      }
+
+      .notes {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="window" aria-label="VibePet session dashboard mockup">
+      <header class="topbar">
+        <div class="title">
+          <div class="pet" aria-hidden="true">◖</div>
+          <div>
+            <h1>Sessions</h1>
+            <div class="subtitle">总览保持稳定；系统事件只更新状态，不抢导航</div>
+          </div>
+        </div>
+        <div class="attention-banner">
+          <span class="banner-dot"></span>
+          1 个 agent 需要处理
+        </div>
+      </header>
+
+      <div class="shell">
+        <aside class="sidebar" aria-label="Session list">
+          <div class="summary">
+            <div class="metric">
+              <div class="metric-value">4</div>
+              <div class="metric-label">total</div>
+            </div>
+            <div class="metric">
+              <div class="metric-value">2</div>
+              <div class="metric-label">running</div>
+            </div>
+            <div class="metric">
+              <div class="metric-value">1</div>
+              <div class="metric-label">attention</div>
+            </div>
+          </div>
+
+          <div class="session-list">
+            <div class="section-label">Pinned by state</div>
+
+            <div class="session-row needs">
+              <span class="status-dot needs"></span>
+              <div class="row-main">
+                <div class="row-title">Claude · installer approval</div>
+                <div class="row-sub">
+                  <span class="pill">claude</span>
+                  <span class="pill">Ghostty</span>
+                  <span>4m</span>
+                </div>
+              </div>
+              <div class="count-pill">action</div>
+            </div>
+
+            <div class="session-row active">
+              <span class="status-dot running"></span>
+              <div class="row-main">
+                <div class="row-title">Codex · dashboard routing</div>
+                <div class="row-sub">
+                  <span class="pill">codex</span>
+                  <span class="pill">Terminal</span>
+                  <span>12m</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="session-row new">
+              <span class="status-dot running"></span>
+              <div class="row-main">
+                <div class="row-title">Claude · test run</div>
+                <div class="row-sub">
+                  <span class="pill">claude</span>
+                  <span class="pill">iTerm</span>
+                  <span>33s</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="session-row">
+              <span class="status-dot error"></span>
+              <div class="row-main">
+                <div class="row-title">Codex · hook parse fix</div>
+                <div class="row-sub">
+                  <span class="pill">codex</span>
+                  <span>done</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="detail" aria-label="Locked session detail">
+          <div class="detail-header">
+            <div>
+              <div class="breadcrumb">
+                <div class="back" aria-hidden="true">‹</div>
+                Home / locked detail
+              </div>
+              <div class="detail-title">Codex · dashboard routing</div>
+              <div class="detail-subtitle">当前详情由用户选择锁定；其他 agent 更新只在左侧和顶部提示</div>
+            </div>
+            <div class="detail-actions">
+              <div class="icon-button" title="Jump to terminal">↗</div>
+              <div class="icon-button" title="Close panel">×</div>
+            </div>
+          </div>
+
+          <div class="tabs">
+            <div class="tab"><span>Claude approval</span><span class="status-dot needs"></span></div>
+            <div class="tab active"><span>Codex routing</span><span class="status-dot running"></span></div>
+            <div class="tab"><span>Claude tests</span><span class="status-dot running"></span></div>
+          </div>
+
+          <article class="content-card">
+            <div class="card-top">
+              <div class="state-label">
+                <span class="status-dot running"></span>
+                Running
+              </div>
+              <div class="locked-note">不会因为新 running agent 自动切走</div>
+            </div>
+
+            <div class="activity">
+              <div class="message">
+                <div class="message-title">Latest activity</div>
+                <div class="message-body">
+                  Updating dashboard projection. Visible sessions changed, but selected route remains this session.
+                </div>
+              </div>
+
+              <div class="message">
+                <div class="message-title">Stable navigation rule</div>
+                <div class="message-body">
+                  首页保持首页，详情保持详情。只有用户点击 tab/row，或当前 session 被清理消失，才改变页面。
+                </div>
+              </div>
+
+              <div class="attention-card">
+                <div class="message-title">Other agent needs attention</div>
+                <div class="message-body">
+                  Claude approval is waiting. Show this inline alert and badge, but do not steal the current detail view.
+                </div>
+              </div>
+            </div>
+
+            <footer class="footer">
+              <div class="footer-hint">Approval cards only appear here when this selected session needs action.</div>
+              <button class="primary-action">View waiting agent</button>
+            </footer>
+          </article>
+        </section>
+      </div>
+    </section>
+
+    <section class="notes" aria-label="Design notes">
+      <div class="note">
+        <strong>核心原则</strong>
+        系统可以改变内容和 badge，但不能自动改变用户当前 route。
+      </div>
+      <div class="note">
+        <strong>首页行为</strong>
+        首页是稳定总览。新 agent、running 更新、attention 只改变排序和状态。
+      </div>
+      <div class="note">
+        <strong>详情行为</strong>
+        详情页锁定用户选中的 agent。其他 agent 的动作通过顶部提示和 tab badge 暴露。
+      </div>
+    </section>
+  </main>
+</body>
+</html>

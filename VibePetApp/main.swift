@@ -12,12 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboardingWindow: NSWindow?
     private var importWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var dashboardWindowController: SessionDashboardWindowController?
     private var petVisible = false
 
     private let petWindowSurface = PetWindowSurface()
     private lazy var petController = PetController(
         surface: petWindowSurface,
-        decisionTimeout: ((try? configStore.read()) ?? .default).decisionTimeoutSeconds
+        openDashboard: { [weak self] in self?.toggleDashboard() }
     )
     private var bridgeHost: BridgeServerHost?
 
@@ -48,8 +49,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startBridge() {
         let host = BridgeServerHost(
             petController: petController,
-            onSessionStateChange: { [weak self] _ in
+            onSessionStateChange: { [weak self] state in
                 self?.statusItemController?.rebuild()
+                self?.dashboardWindowController?.update(
+                    state: state,
+                    activePetName: self?.currentPetName() ?? "VibePet"
+                )
             }
         )
         bridgeHost = host
@@ -105,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         let controller = petWindowController ?? PetWindowController(frame: frame, configStore: configStore)
+        controller.onOpenDashboard = { [weak self] in self?.petController.openDashboardFromPetClick() }
+        controller.onCyclePet = { [weak self] in self?.cyclePet() }
         controller.setFrame(frame, display: true, animate: false)
         controller.showWindow(nil)
         petWindowController = controller
@@ -149,11 +156,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshPet()
     }
 
+    private func cyclePet() {
+        let config = (try? configStore.read()) ?? .default
+        let assets = (try? assetStore.list()) ?? []
+        guard let nextSlug = PetSelection.next(current: config.activePetID, pets: assets) else {
+            return
+        }
+        switchPet(to: nextSlug)
+        if let asset = assets.first(where: { $0.slug == nextSlug }) {
+            petWindowSurface.showPetSwitchTooltip(name: asset.displayName)
+        }
+    }
+
     private func activeAsset(config: AppConfig) -> PetAsset? {
         guard let slug = config.activePetID else {
             return nil
         }
         return (try? assetStore.read(slug: slug)) ?? nil
+    }
+
+    private func currentPetName() -> String {
+        let config = (try? configStore.read()) ?? .default
+        return activeAsset(config: config)?.displayName ?? "VibePet"
+    }
+
+    private func toggleDashboard() {
+        if let dashboardWindowController, dashboardWindowController.window?.isVisible == true {
+            dashboardWindowController.close()
+            return
+        }
+        openDashboard()
+    }
+
+    private func openDashboard() {
+        guard let petFrame = petWindowSurface.petFrame else {
+            return
+        }
+
+        let controller = SessionDashboardWindowController(
+            state: bridgeHost?.sessionStateSnapshot ?? SessionState(),
+            activePetName: currentPetName(),
+            petFrame: petFrame,
+            visibleFrame: petWindowSurface.visibleFrame,
+            cardProvider: { [weak self] sessionID in
+                self?.petController.dashboardCard(for: sessionID)
+            },
+            onJump: { target in
+                try? TerminalJumpService().jump(to: target)
+            },
+            onSelectedSessionChanged: { [weak self] sessionID in
+                self?.petController.dashboardSelectionChanged(sessionID: sessionID)
+            }
+        )
+        controller.onClose = { [weak self, weak controller] in
+            guard self?.dashboardWindowController === controller else { return }
+            self?.dashboardWindowController = nil
+            self?.petWindowSurface.dashboardController = nil
+            self?.petController.dashboardSelectionChanged(sessionID: nil)
+        }
+        dashboardWindowController = controller
+        petWindowSurface.dashboardController = controller
+        controller.show()
     }
 
     // MARK: - Onboarding

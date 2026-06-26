@@ -14,9 +14,7 @@ import VibePetCore
 //
 // Fail-open is the contract: defer == no stdout, exit 0 → the tool falls back to
 // its native permission flow. For decisions, the CLI read deadline is the final
-// fail-open backstop if the App crashes mid-decision; we give it a small margin
-// over the App-side countdown so the App replies first in the normal "no user
-// response" case (technical design §3.4 / §7).
+// fail-open backstop if the App crashes mid-decision or the user never responds.
 let arguments = CommandLine.arguments
 let environment = ProcessInfo.processInfo.environment
 
@@ -49,9 +47,10 @@ let eventData = HookInvocation.eventData(arguments: arguments, stdin: stdinData)
 // directory instead of the user's real one. Unset in normal use → default path.
 let supportRoot = environment["VIBEPET_SUPPORT_DIR"].map { URL(fileURLWithPath: $0) }
 
-let decisionTimeout = ((try? ConfigStore(applicationSupportRoot: supportRoot).read()) ?? .default)
-    .decisionTimeoutSeconds
-let client = BridgeClient(socketPath: SocketPath(applicationSupportRoot: supportRoot), readTimeout: decisionTimeout + 5)
+let client = BridgeClient(
+    socketPath: SocketPath(applicationSupportRoot: supportRoot),
+    readTimeout: TimeInterval(ClaudeCodeConfigWriter.managedDecisionTimeout)
+)
 let runtime = HookRuntime(adapter: adapter, client: client, log: debugLog)
 
 let outcome = await runtime.run(stdin: eventData, env: environment)

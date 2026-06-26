@@ -11,6 +11,14 @@ final class PetWindowController: NSWindowController {
     private var hitMask: SpriteHitMask?
     private var hitMasksByFrame: [ObjectIdentifier: SpriteHitMask] = [:]
     private var mouseMonitors: [Any] = []
+    var onOpenDashboard: () -> Void {
+        get { dragController.onOpenDashboard }
+        set { dragController.onOpenDashboard = newValue }
+    }
+    var onCyclePet: () -> Void {
+        get { dragController.onCyclePet }
+        set { dragController.onCyclePet = newValue }
+    }
 
     init(frame: CGRect, configStore: ConfigStore) {
         let window = PetWindow(frame: frame)
@@ -29,8 +37,20 @@ final class PetWindowController: NSWindowController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func setContent<Content: View>(_ content: Content) {
-        hitTestView.rootView = AnyView(content)
+    func setContent<Content: View>(_ content: Content, fade: Bool = false) {
+        let content = AnyView(content)
+        guard fade else {
+            hitTestView.alphaValue = 1
+            hitTestView.rootView = content
+            return
+        }
+
+        hitTestView.alphaValue = 0
+        hitTestView.rootView = content
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            hitTestView.animator().alphaValue = 1
+        }
     }
 
     /// Sets the sprite whose opaque pixels define the clickable pet body; pass
@@ -141,5 +161,13 @@ private final class PetHitTestHostingView: NSHostingView<AnyView> {
 
     override func mouseUp(with event: NSEvent) {
         dragController.mouseUp(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        dragController.rightMouseDown(with: event)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        dragController.rightMouseUp(with: event)
     }
 }

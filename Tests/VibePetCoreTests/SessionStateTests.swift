@@ -163,6 +163,20 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.sessionsByID["s1"]?.summary, "Still working")
     }
 
+    func testActivityUpdatedAdvancesRunningSessionRecency() {
+        var state = state(applying: [started("s1", at: base)])
+
+        state.apply(.activityUpdated(
+            sessionID: "s1",
+            timestamp: base.addingTimeInterval(30),
+            summary: "Codex PostToolUse: Bash"
+        ))
+
+        XCTAssertEqual(state.sessionsByID["s1"]?.phase, .running)
+        XCTAssertEqual(state.sessionsByID["s1"]?.summary, "Codex PostToolUse: Bash")
+        XCTAssertEqual(state.sessionsByID["s1"]?.updatedAt, base.addingTimeInterval(30))
+    }
+
     func testJumpTargetUpdatedChangesOnlyJumpTargetAndTimestamp() {
         var state = state(applying: [
             started("s1", at: base),

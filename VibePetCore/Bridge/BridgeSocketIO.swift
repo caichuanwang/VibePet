@@ -1,7 +1,16 @@
 import Foundation
 
 enum BridgeSocketIO {
+    private static let installSignalHandling: Void = {
+        _ = Darwin.signal(SIGPIPE, SIG_IGN)
+    }()
+
+    static func ignoreSigPipe() {
+        _ = installSignalHandling
+    }
+
     static func socketAddress(for path: String) throws -> sockaddr_un {
+        ignoreSigPipe()
         let encodedPath = Array(path.utf8)
         let maxPathLength = MemoryLayout.size(ofValue: sockaddr_un().sun_path)
         guard encodedPath.count < maxPathLength else {
@@ -112,6 +121,8 @@ enum BridgeSocketIO {
     /// process. The notification path always closes the client before the server
     /// writes its reply, so without this the server (and App) would crash.
     static func disableSigPipe(_ fileDescriptor: Int32) {
+        _ = fcntl(fileDescriptor, F_SETNOSIGPIPE, 1)
+
         var on: Int32 = 1
         _ = setsockopt(
             fileDescriptor,
@@ -235,6 +246,8 @@ final class BridgeServerState: @unchecked Sendable {
             BridgeSocketIO.close(listenFileDescriptor)
             throw BridgeServerError.listenFailed(path: "")
         }
+
+        BridgeSocketIO.disableSigPipe(pipeDescriptors[1])
 
         lock.lock()
         if isStopped {

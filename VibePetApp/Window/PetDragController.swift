@@ -1,14 +1,26 @@
 import AppKit
 import VibePetCore
 
+@MainActor
 final class PetDragController {
     private weak var window: NSWindow?
     private let configStore: ConfigStore
     private var dragOffset: CGPoint?
+    private var pressOrigin: CGPoint?
+    private var isDragging = false
+    var onOpenDashboard: () -> Void
+    var onCyclePet: () -> Void
 
-    init(window: NSWindow, configStore: ConfigStore) {
+    init(
+        window: NSWindow,
+        configStore: ConfigStore,
+        onOpenDashboard: @escaping () -> Void = {},
+        onCyclePet: @escaping () -> Void = {}
+    ) {
         self.window = window
         self.configStore = configStore
+        self.onOpenDashboard = onOpenDashboard
+        self.onCyclePet = onCyclePet
     }
 
     func mouseDown(with event: NSEvent) {
@@ -17,15 +29,23 @@ final class PetDragController {
         }
         let location = event.locationInWindow
         dragOffset = CGPoint(x: location.x, y: location.y)
+        pressOrigin = NSEvent.mouseLocation
+        isDragging = false
         window.ignoresMouseEvents = false
     }
 
     func mouseDragged(with event: NSEvent) {
-        guard let window, let dragOffset, let screenFrame = NSScreen.main?.visibleFrame else {
+        guard let window, let dragOffset, let pressOrigin, let screenFrame = NSScreen.main?.visibleFrame else {
             return
         }
 
         let mouse = NSEvent.mouseLocation
+        if !isDragging {
+            guard ScreenSnap.dragIntent(from: pressOrigin, to: mouse) == .drag else {
+                return
+            }
+            isDragging = true
+        }
         let origin = CGPoint(x: mouse.x - dragOffset.x, y: mouse.y - dragOffset.y)
         let frame = ScreenSnap.clamp(CGRect(origin: origin, size: window.frame.size), in: screenFrame)
         window.setFrame(frame, display: true)
@@ -37,10 +57,30 @@ final class PetDragController {
             return
         }
 
+        guard isDragging else {
+            dragOffset = nil
+            pressOrigin = nil
+            onOpenDashboard()
+            return
+        }
+
         let frame = ScreenSnap.snap(window.frame, in: screenFrame)
         window.setFrame(frame, display: true, animate: true)
         persist(frame: frame, screenFrame: screenFrame)
         dragOffset = nil
+        pressOrigin = nil
+        isDragging = false
+    }
+
+    func rightMouseDown(with event: NSEvent) {
+        dragOffset = nil
+        pressOrigin = nil
+        isDragging = false
+        window?.ignoresMouseEvents = false
+    }
+
+    func rightMouseUp(with event: NSEvent) {
+        onCyclePet()
     }
 
     private func persist(frame: CGRect, screenFrame: CGRect) {

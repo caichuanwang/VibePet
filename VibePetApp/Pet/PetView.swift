@@ -25,12 +25,20 @@ struct PetView: View {
             }
         }
         .frame(width: Self.spriteSide, height: Self.spriteSide)
+        .overlay(alignment: .bottomTrailing) {
+            statusIndicator
+                .padding(.trailing, 14)
+                .padding(.bottom, 12)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .task(id: asset?.spritesheetURL) {
             loadSpritesheet()
         }
     }
 
     static let spriteSide: CGFloat = 120
+    private static let indicatorSide: CGFloat = 10
 
     fileprivate static let emptyHitFrame: CGImage? = {
         var pixel: UInt8 = 0
@@ -49,6 +57,17 @@ struct PetView: View {
             return context.makeImage()
         }
     }()
+
+    private var statusIndicator: some View {
+        Circle()
+            .fill(activity.statusIndicatorColor)
+            .frame(width: Self.indicatorSide, height: Self.indicatorSide)
+            .overlay(
+                Circle()
+                    .stroke(Color.black.opacity(0.45), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.28), radius: 2, y: 1)
+    }
 
     private func loadSpritesheet() {
         guard let asset, let image = ImageLoading.cgImage(at: asset.spritesheetURL) else {

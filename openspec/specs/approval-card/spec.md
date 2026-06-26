@@ -5,12 +5,12 @@ TBD - created by archiving change implement-m4-approval-loop. Update Purpose aft
 ## Requirements
 ### Requirement: Three-section approval card layout
 
-`VibePetApp` SHALL provide an `ApprovalCard` that renders `.approval` content in three sections per §5.3.3: a header showing the source (`tool · projectName · sessionShortId`) and a risk indicator, a body rendering the `ActionPreview` compactly, and a footer with a countdown and action buttons. When the source carries a jump target, double-clicking the non-control card body SHALL invoke the injected terminal jump action once without changing the footer action behavior.
+`VibePetApp` SHALL provide an `ApprovalCard` that renders `.approval` content in three sections per §5.3.3: a header showing the source (`tool · projectName · sessionShortId`) and a risk indicator, a body rendering the `ActionPreview` compactly, and a footer with action buttons. When the source carries a jump target, double-clicking the non-control card body SHALL invoke the injected terminal jump action once without changing the footer action behavior.
 
 #### Scenario: Approval renders header, body, and footer
 
 - **WHEN** an `.approval` envelope is presented in the `decide` state
-- **THEN** the card shows the source + risk header, the `ActionPreview` body, and a footer with countdown and buttons
+- **THEN** the card shows the source + risk header, the `ActionPreview` body, and a footer with buttons
 
 #### Scenario: ActionPreview renders compactly per variant
 
@@ -49,15 +49,6 @@ TBD - created by archiving change implement-m4-approval-loop. Update Purpose aft
 
 - **WHEN** the approval's `alwaysAllow` is `nil`
 - **THEN** the card does not show an "Always allow" button
-
-### Requirement: Approval countdown fails open
-
-`ApprovalCard` SHALL display a countdown to the configured decision deadline; when it reaches zero the card SHALL fail open (defer) and surface a readable hint that the action was deferred to the native flow.
-
-#### Scenario: Countdown reaching zero defers
-
-- **WHEN** the approval countdown reaches zero with no user decision
-- **THEN** the card defers (fail-open) and shows a readable timeout hint
 
 ### Requirement: Terminal-approval downgrade form
 

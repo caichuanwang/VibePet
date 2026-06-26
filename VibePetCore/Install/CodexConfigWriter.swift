@@ -15,7 +15,7 @@ public struct CodexConfigWriter: ToolConfigWriter {
     public let tool: ToolKind = .codex
     public let configURL: URL
     public let hooksURL: URL
-    public var managedHookKeys: [String] { ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit"] }
+    public var managedHookKeys: [String] { ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit", "PostToolUse"] }
     public var managedFiles: [URL] { [configURL, hooksURL] }
 
     private let hookBinaryPath: String
@@ -27,8 +27,8 @@ public struct CodexConfigWriter: ToolConfigWriter {
     /// it for status, remove it on uninstall, and keep writing to it when the user's
     /// existing config already uses it (so we don't break an older Codex).
     static let legacyFeatureKey = "codex_hooks"
-    static let permissionTimeout = 3600
-    static let stopTimeout = 45
+    public static let permissionTimeout = 3600
+    public static let stopTimeout = 45
 
     public init(codexDirectory: URL? = nil, hookBinaryPath: String? = nil) {
         let directory = codexDirectory ?? FileManager.default.homeDirectoryForCurrentUser

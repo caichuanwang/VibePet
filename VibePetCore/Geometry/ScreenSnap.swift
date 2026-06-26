@@ -4,6 +4,12 @@ public enum ScreenSnap {
     public static let defaultRightInset: CGFloat = 24
     public static let snapThreshold: CGFloat = 40
     public static let snappedEdgeInset: CGFloat = 8
+    public static let dragThreshold: CGFloat = 6
+
+    public enum DragIntent: Equatable, Sendable {
+        case click
+        case drag
+    }
 
     public static func defaultFrame(spriteSize: CGSize, in visibleFrame: CGRect) -> CGRect {
         let origin = CGPoint(
@@ -50,6 +56,17 @@ public enum ScreenSnap {
             fallback: visibleFrame.minY
         )
         return CGRect(origin: CGPoint(x: x, y: y), size: frame.size)
+    }
+
+    public static func dragIntent(
+        from pressOrigin: CGPoint,
+        to currentPoint: CGPoint,
+        threshold: CGFloat = dragThreshold
+    ) -> DragIntent {
+        let dx = currentPoint.x - pressOrigin.x
+        let dy = currentPoint.y - pressOrigin.y
+        let distanceSquared = dx * dx + dy * dy
+        return distanceSquared >= threshold * threshold ? .drag : .click
     }
 
     private static func clamped(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat, fallback: CGFloat) -> CGFloat {

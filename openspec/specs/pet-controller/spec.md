@@ -6,6 +6,8 @@ Define the `PetController` state machine and the `BridgeServerHost` routing that
 
 `VibePetApp` SHALL define a `PetController` driving a state machine over `idle`, `greet`, `notify`, and `decide` states per the technical design §5.2. The controller's current activity SHALL be derived from the App's `SessionState` (the single source of truth) rather than from a single envelope: any attention-requiring session drives `decide`; a freshly started session drives `greet` once; completion/status envelopes drive `notify`; otherwise `idle`. `idle` plays breathing/idle animation; `greet` plays the greeting; `notify` shows a non-interactive bubble carrying `completion` / `status`; `decide` highlights the pet for attention and shows an interactive bubble for response-requiring content (`approval` / `question`). When presenting any bubble/card, the controller SHALL preserve the envelope `SourceInfo` including its optional jump target and SHALL provide the surface with a terminal jump action.
 
+The controller's presentation surface SHALL be able to route actionable and notification content into the session dashboard's per-session tabs (see `session-dashboard`) as an alternative to standalone anchored bubble windows, while the underlying state derivation from `SessionState` is unchanged. A left-click "open" action from the pet (see `desktop-pet-window`) SHALL open the dashboard panel.
+
 #### Scenario: Notification content enters notify state
 
 - **WHEN** a `.completion` or `.status` envelope is applied to `SessionState` and the session needs no attention
@@ -25,6 +27,16 @@ Define the `PetController` state machine and the `BridgeServerHost` routing that
 
 - **WHEN** `PetController` presents status, completion, approval, or question content from an envelope whose source has a jump target
 - **THEN** the surface receives that source and a jump action capable of invoking terminal jump-back for the same target
+
+#### Scenario: Left-click opens the dashboard
+
+- **WHEN** the pet emits an open-dashboard action from a left click
+- **THEN** `PetController` opens the session dashboard panel
+
+#### Scenario: Actionable content is available in the session tab
+
+- **WHEN** a session is in `decide` (a pending `.approval` or `.question`) and the dashboard is open
+- **THEN** that session's tab content presents the same interactive card the controller would otherwise anchor to the pet
 
 ### Requirement: Bridge server routes envelopes to the pet controller
 
@@ -52,7 +64,7 @@ Define the `PetController` state machine and the `BridgeServerHost` routing that
 
 ### Requirement: Approval response round-trip with requestId pairing
 
-`BridgeServerHost` SHALL, for an envelope whose `content.needsResponse` is `true`, mark the session `waitingForApproval`/`waitingForAnswer` in `SessionState`, route it to `PetController`'s `decide` state, and await the user's decision, then reply on the same connection with a `BridgeResponseEnvelope` whose `requestId` matches the request. On resolution it SHALL also update `SessionState`: "Deny" maps to `deny(reason:)` and `resolvePermission(approved: false)`; "Allow once" to `allowOnce` and `resolvePermission(approved: true)`; "Always allow" -- when supported -- to `allowAlways(scopeHint:)` and `resolvePermission(approved: true)`; an answered question to `answerQuestion`. If the decision times out or the bubble is dismissed without a decision, it SHALL reply `.defer` and apply `actionableStateResolved` (returning the session to `running`, native flow unchanged). The await SHALL NOT block the accept loop or other connections.
+`BridgeServerHost` SHALL, for an envelope whose `content.needsResponse` is `true`, mark the session `waitingForApproval`/`waitingForAnswer` in `SessionState`, route it to `PetController`'s `decide` state, and await the user's decision indefinitely (there is no App-side decision timeout), then reply on the same connection with a `BridgeResponseEnvelope` whose `requestId` matches the request. On resolution it SHALL also update `SessionState`: "Deny" maps to `deny(reason:)` and `resolvePermission(approved: false)`; "Allow once" to `allowOnce` and `resolvePermission(approved: true)`; "Always allow" -- when supported -- to `allowAlways(scopeHint:)` and `resolvePermission(approved: true)`; an answered question to `answerQuestion`. If the bubble is dismissed without a decision (or the pet is hidden so no card can be presented), it SHALL reply `.defer` and apply `actionableStateResolved` (returning the session to `running`, native flow unchanged). The CLI hook's own read timeout remains the ultimate fail-open backstop should the user never act. The await SHALL NOT block the accept loop or other connections, and the decision continuation SHALL remain single-owner so a card is never resumed twice.
 
 #### Scenario: Deny replies with a paired deny and completes the session
 
@@ -64,9 +76,14 @@ Define the `PetController` state machine and the `BridgeServerHost` routing that
 - **WHEN** the user picks "Allow once" on the approval card for a request
 - **THEN** `BridgeServerHost` replies a `BridgeResponseEnvelope` with the matching `requestId` and `approval(allowOnce)`, and the session phase returns to `running`
 
-#### Scenario: No decision replies with defer and resolves the actionable state
+#### Scenario: Pending approval waits indefinitely for the user
 
-- **WHEN** the decision deadline elapses or the card is dismissed without a decision
+- **WHEN** an approval card is presented and the user has not yet acted
+- **THEN** the card stays presented with no countdown and the request remains pending (no automatic `.defer` is emitted by the App)
+
+#### Scenario: Dismissal replies with defer and resolves the actionable state
+
+- **WHEN** the card is dismissed without a decision, or the pet is hidden so the card cannot be presented
 - **THEN** `BridgeServerHost` replies `.defer` with the matching `requestId` and applies `actionableStateResolved` so the session returns to `running` without blocking the tool
 
 #### Scenario: Awaiting a decision does not starve other connections
@@ -76,7 +93,7 @@ Define the `PetController` state machine and the `BridgeServerHost` routing that
 
 ### Requirement: Question response round-trip with requestId pairing
 
-`BridgeServerHost` and `PetController` SHALL, for an envelope whose `content` is `.question`, present a `QuestionCard` in the `decide` state (rather than an `ApprovalCard`) and await the user's answer, then reply on the same connection with a `BridgeResponseEnvelope` whose `requestId` matches the request and whose `response` is `.question(QuestionAnswer)`. If the answer times out or the card is dismissed without a submission, it SHALL reply `.defer`. The await SHALL NOT block the accept loop or other connections. Question cards SHALL participate in the decision queue and the `decide` priority alongside approval cards.
+`BridgeServerHost` and `PetController` SHALL, for an envelope whose `content` is `.question`, present a `QuestionCard` in the `decide` state (rather than an `ApprovalCard`) and await the user's answer indefinitely (there is no App-side decision timeout), then reply on the same connection with a `BridgeResponseEnvelope` whose `requestId` matches the request and whose `response` is `.question(QuestionAnswer)`. If the card is dismissed without a submission, it SHALL reply `.defer`. The CLI hook's own read timeout remains the ultimate fail-open backstop. The await SHALL NOT block the accept loop or other connections. Question cards SHALL participate in the decision queue and the `decide` priority alongside approval cards.
 
 #### Scenario: Question content presents a question card
 
@@ -88,7 +105,12 @@ Define the `PetController` state machine and the `BridgeServerHost` routing that
 - **WHEN** the user submits the question card for a request
 - **THEN** `BridgeServerHost` replies a `BridgeResponseEnvelope` with the matching `requestId` and `question(QuestionAnswer)`
 
-#### Scenario: No answer replies with defer
+#### Scenario: Unsubmitted question waits indefinitely
 
-- **WHEN** the question card's deadline elapses or it is dismissed without a submission
+- **WHEN** a question card is presented and the user has not yet submitted
+- **THEN** the card stays presented with no countdown and the request remains pending (no automatic `.defer` is emitted by the App)
+
+#### Scenario: Dismissal replies with defer
+
+- **WHEN** the question card is dismissed without a submission
 - **THEN** the reply is a `BridgeResponseEnvelope` with the matching `requestId` and `.defer`
