@@ -151,8 +151,9 @@ final class BridgeServerHost {
     }
 
     func runLivenessSweepOnce() async {
-        importActiveSessions(await activeSessionProvider())
-        let aliveSessionIDs = await liveSessionProvider(sessionState)
+        let activeSessions = await activeSessionProvider()
+        let discoveredSessionIDs = importActiveSessions(activeSessions)
+        let aliveSessionIDs = await liveSessionProvider(sessionState).union(discoveredSessionIDs)
         sessionState.markProcessLiveness(aliveSessionIDs: aliveSessionIDs)
         let visibleSessions = sessionState.visibleSessions
         let resolver = terminalJumpResolver
@@ -170,8 +171,17 @@ final class BridgeServerHost {
         publishSessionState()
     }
 
-    private func importActiveSessions(_ activeSessions: [ActiveAgentSession]) {
-        for activeSession in activeSessions where sessionState.sessionsByID[activeSession.id] == nil {
+    private func importActiveSessions(_ activeSessions: [ActiveAgentSession]) -> Set<String> {
+        var discoveredAliveIDs: Set<String> = []
+        for activeSession in activeSessions {
+            if sessionState.sessionsByID[activeSession.id] != nil {
+                discoveredAliveIDs.insert(activeSession.id)
+                continue
+            }
+            if let matchingHookSession = matchingHookSession(for: activeSession) {
+                discoveredAliveIDs.insert(matchingHookSession.id)
+                continue
+            }
             let now = Date.now
             sessionState.upsertDiscoveredSession(AgentSession(
                 id: activeSession.id,
@@ -187,7 +197,9 @@ final class BridgeServerHost {
                 isProcessAlive: true,
                 processNotSeenCount: 0
             ))
+            discoveredAliveIDs.insert(activeSession.id)
         }
+        return discoveredAliveIDs
     }
 
     private func startLivenessSweep() {
@@ -204,7 +216,7 @@ final class BridgeServerHost {
 
     private func applyNotification(_ envelope: BridgeEnvelope) {
         if let event = envelope.agentEvent {
-            sessionState.apply(rekeyEventIfNeeded(event, source: envelope.source))
+            apply(rekeyEventIfNeeded(event, source: envelope.source), source: envelope.source)
             publishSessionState()
             return
         }
@@ -236,7 +248,7 @@ final class BridgeServerHost {
     private func applyDecisionEntry(_ envelope: BridgeEnvelope) {
         ensureSessionExists(for: envelope)
         if let event = envelope.agentEvent {
-            sessionState.apply(event)
+            apply(event, source: envelope.source)
             publishSessionState()
             return
         }
@@ -350,8 +362,86 @@ final class BridgeServerHost {
     }
 
     func applyForTesting(_ event: AgentEvent) {
-        sessionState.apply(event)
+        apply(event, source: nil)
         publishSessionState()
+    }
+
+    private func apply(_ event: AgentEvent, source: SourceInfo?) {
+        if case .sessionStarted = event {
+            removeMatchingDiscoveredPlaceholder(for: event, source: source)
+        }
+        sessionState.apply(event)
+    }
+
+    private func removeMatchingDiscoveredPlaceholder(for event: AgentEvent, source: SourceInfo?) {
+        guard sessionState.sessionsByID[event.sessionID] == nil else {
+            return
+        }
+        guard let match = matchingDiscoveredSession(for: event, source: source) else {
+            return
+        }
+        sessionState.removeSession(sessionID: match.id)
+    }
+
+    private func matchingHookSession(for activeSession: ActiveAgentSession) -> AgentSession? {
+        let matches = sessionState.sessionsByID.values.filter { session in
+            !Self.isDiscoveredSessionID(session.id)
+                && session.tool == activeSession.tool
+                && Self.jumpTargetsMatch(session.jumpTarget, activeSession.jumpTarget)
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private func matchingDiscoveredSession(for event: AgentEvent, source: SourceInfo?) -> AgentSession? {
+        let eventJumpTarget = source?.jumpTarget ?? eventJumpTarget(event)
+        let matches = sessionState.sessionsByID.values.filter { session in
+            Self.isDiscoveredSessionID(session.id)
+                && session.tool == eventTool(event, source: source)
+                && Self.jumpTargetsMatch(session.jumpTarget, eventJumpTarget)
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private func eventTool(_ event: AgentEvent, source: SourceInfo?) -> ToolKind {
+        if let source {
+            return source.tool
+        }
+        if case let .sessionStarted(_, _, _, tool, _, _) = event {
+            return tool
+        }
+        return .codex
+    }
+
+    private func eventJumpTarget(_ event: AgentEvent) -> JumpTarget? {
+        guard case let .sessionStarted(_, _, _, _, _, jumpTarget) = event else {
+            return nil
+        }
+        return jumpTarget
+    }
+
+    private static func isDiscoveredSessionID(_ id: String) -> Bool {
+        id.hasPrefix("discovered-")
+    }
+
+    private static func jumpTargetsMatch(_ lhs: JumpTarget?, _ rhs: JumpTarget?) -> Bool {
+        guard let lhs, let rhs else {
+            return false
+        }
+        if let lhsTTY = lhs.terminalTTY.flatMap(normalizedTerminalTTY),
+           let rhsTTY = rhs.terminalTTY.flatMap(normalizedTerminalTTY) {
+            return lhsTTY == rhsTTY
+        }
+        if let lhsDirectory = lhs.workingDirectory,
+           let rhsDirectory = rhs.workingDirectory {
+            return lhsDirectory == rhsDirectory
+        }
+        return false
+    }
+
+    private static func normalizedTerminalTTY(_ tty: String) -> String? {
+        let trimmed = tty.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.replacingOccurrences(of: "/dev/", with: "")
     }
 }
 

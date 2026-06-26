@@ -112,6 +112,120 @@ final class ActiveAgentProcessDiscoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testRepeatedProcessDiscoveryKeepsPlaceholderVisibleWhenLivenessMisses() async {
+        let surface = DiscoveryTestPetSurface()
+        let controller = PetController(surface: surface)
+        let discovered = ActiveAgentSession(
+            id: "discovered-codex-101",
+            title: "VibePet",
+            tool: .codex,
+            summary: "Detected running Codex",
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workingDirectory: "/Users/test/Code/VibePet",
+                terminalTTY: "ttys001"
+            )
+        )
+        let host = BridgeServerHost(
+            petController: controller,
+            liveSessionProvider: { _ in [] },
+            activeSessionProvider: { [discovered] in [discovered] },
+            livenessInterval: 60
+        )
+
+        await host.runLivenessSweepOnce()
+        await host.runLivenessSweepOnce()
+
+        let session = host.sessionStateSnapshot.sessionsByID["discovered-codex-101"]
+        XCTAssertNotNil(session)
+        XCTAssertEqual(session?.isProcessAlive, true)
+        XCTAssertEqual(session?.processNotSeenCount, 0)
+        XCTAssertEqual(SessionDashboardProjection(state: host.sessionStateSnapshot, activePetName: "Pixel").totalCount, 1)
+    }
+
+    @MainActor
+    func testHookSessionStartReplacesMatchingDiscoveredPlaceholder() async {
+        let surface = DiscoveryTestPetSurface()
+        let controller = PetController(surface: surface)
+        let discovered = ActiveAgentSession(
+            id: "discovered-codex-101",
+            title: "VibePet",
+            tool: .codex,
+            summary: "Detected running Codex",
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workingDirectory: "/Users/test/Code/VibePet",
+                terminalTTY: "ttys001"
+            )
+        )
+        let host = BridgeServerHost(
+            petController: controller,
+            liveSessionProvider: { state in Set(state.sessionsByID.keys) },
+            activeSessionProvider: { [discovered] in [discovered] },
+            livenessInterval: 60
+        )
+
+        await host.runLivenessSweepOnce()
+        host.applyForTesting(.sessionStarted(
+            sessionID: "codex-session-full",
+            timestamp: Date(),
+            title: "VibePet",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workingDirectory: "/Users/test/Code/VibePet",
+                terminalTTY: "ttys001"
+            )
+        ))
+
+        XCTAssertNil(host.sessionStateSnapshot.sessionsByID["discovered-codex-101"])
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-session-full"]?.phase, .running)
+        XCTAssertEqual(host.sessionStateSnapshot.visibleSessions.map(\.id), ["codex-session-full"])
+        XCTAssertEqual(SessionDashboardProjection(state: host.sessionStateSnapshot, activePetName: "Pixel").totalCount, 1)
+    }
+
+    @MainActor
+    func testProcessDiscoveryDoesNotReaddPlaceholderForMatchingHookSession() async {
+        let surface = DiscoveryTestPetSurface()
+        let controller = PetController(surface: surface)
+        let discovered = ActiveAgentSession(
+            id: "discovered-codex-101",
+            title: "VibePet",
+            tool: .codex,
+            summary: "Detected running Codex",
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workingDirectory: "/Users/test/Code/VibePet",
+                terminalTTY: "ttys001"
+            )
+        )
+        let host = BridgeServerHost(
+            petController: controller,
+            liveSessionProvider: { state in Set(state.sessionsByID.keys) },
+            activeSessionProvider: { [discovered] in [discovered] },
+            livenessInterval: 60
+        )
+
+        host.applyForTesting(.sessionStarted(
+            sessionID: "codex-session-full",
+            timestamp: Date(),
+            title: "VibePet",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workingDirectory: "/Users/test/Code/VibePet",
+                terminalTTY: "ttys001"
+            )
+        ))
+        await host.runLivenessSweepOnce()
+
+        XCTAssertNil(host.sessionStateSnapshot.sessionsByID["discovered-codex-101"])
+        XCTAssertEqual(host.sessionStateSnapshot.visibleSessions.map(\.id), ["codex-session-full"])
+    }
+
+    @MainActor
     func testBridgeHostRunsInitialDiscoveryWhenStarted() async throws {
         let root = try DiscoveryTemporaryDirectory()
         let surface = DiscoveryTestPetSurface()

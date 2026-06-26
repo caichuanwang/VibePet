@@ -197,6 +197,12 @@ public struct SessionState: Equatable, Sendable {
         greetedSessionIDs.insert(sessionID)
     }
 
+    @discardableResult
+    public mutating func removeSession(sessionID: String) -> AgentSession? {
+        greetedSessionIDs.remove(sessionID)
+        return sessionsByID.removeValue(forKey: sessionID)
+    }
+
     public mutating func upsertDiscoveredSession(_ session: AgentSession) {
         guard sessionsByID[session.id] == nil else {
             return
