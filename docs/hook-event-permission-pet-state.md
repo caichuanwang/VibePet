@@ -13,33 +13,34 @@
 
 ## 总览
 
-VibePet 当前一共管理 17 个 hook 入口：
+VibePet 当前一共管理 16 个 hook 入口：
 
 | 工具 | 管理的 hook 数量 | 配置位置 |
 |---|---:|---|
 | Claude Code | 12 | `~/.claude/settings.json` 的 `hooks` |
-| Codex | 5 | `~/.codex/hooks.json`，并开启 `~/.codex/config.toml` 的 `[features].hooks` |
+| Codex | 4 | `~/.codex/hooks.json`，并开启 `~/.codex/config.toml` 的 `[features].hooks` |
 
 但真正会阻塞用户、要求用户点击或提交的入口只有两类：
 
 | 工具 | 阻塞入口 | 展示 |
 |---|---|---|
-| Claude Code | `PreToolUse` | 普通工具展示审批卡；`AskUserQuestion` 展示问题卡 |
+| Claude Code | `PermissionRequest` | 普通工具展示审批卡；`AskUserQuestion` 展示问题卡 |
 | Codex | `PermissionRequest` | 普通权限展示审批卡；自由输入类请求降级为终端处理 |
 
 其他 hook 都是 fire-and-forget 通知：更新会话状态、显示状态/完成气泡，或者只刷新 running 时间，不要求用户做权限决策。
 
 ## Claude Code Hook
 
-Claude Code 安装 12 个 hook key。安装器为每个 key 写入一个 VibePet managed matcher group；只有 `PreToolUse` 写入长 timeout，因为它可能等待用户决策。
+Claude Code 安装 12 个 hook key。安装器为每个 key 写入一个 VibePet managed matcher group；只有 `PermissionRequest` 写入长 timeout，因为它可能等待用户决策。
 
 | Hook | 触发时机 | VibePet 事件 | Bubble 展示 | 权限关系 | 宠物状态 |
 |---|---|---|---|---|---|
 | `SessionStart` | Claude 会话开始 | `sessionStarted` | `status` | 无 | 会话 running；新会话触发 greeting/waving |
 | `UserPromptSubmit` | 用户提交 prompt | `activityUpdated` | `status` | 无 | running |
-| `PreToolUse` | 工具执行前 | 普通工具：`permissionRequested` | `approval` | 用户允许/拒绝/defer 后回传 Claude | waiting/decide |
-| `PreToolUse` + `AskUserQuestion` | Claude 结构化提问 | `questionAsked` | `question` | 用户提交答案后回写 `updatedInput`；否则 defer | waiting/decide |
-| `PostToolUse` | 工具执行后 | `activityUpdated` | `status` | 无 | running；不覆盖正在等待的权限/问题 |
+| `PreToolUse` | 工具执行前 | `activityUpdated` | `status` | 无 | running；不覆盖正在等待的权限/问题 |
+| `PermissionRequest` | Claude 请求权限 | 普通工具：`permissionRequested` | `approval` | 用户允许/拒绝/defer 后回传 Claude | waiting/decide |
+| `PermissionRequest` + `AskUserQuestion` | Claude 结构化提问 | `questionAsked` | `question` | 用户提交答案后回写 `updatedInput`；否则 defer | waiting/decide |
+| `PostToolUse` | 工具执行后 | 忽略 | 无 | 无 | 不变 |
 | `Stop` | 一轮任务结束 | `sessionCompleted` | `completion` | 无 | completed；通常回到 idle |
 | `Notification` | Claude 通知 | `activityUpdated` | `status` | 无 | notify bubble；宠物本体 idle |
 | `SubagentStart` | 子代理开始 | `activityUpdated` | `status` | 无 | running |
@@ -51,7 +52,7 @@ Claude Code 安装 12 个 hook key。安装器为每个 key 写入一个 VibePet
 
 ### Claude 审批卡
 
-`PreToolUse` 且 `tool_name != "AskUserQuestion"` 时展示审批卡。
+`PermissionRequest` 且 `tool_name != "AskUserQuestion"` 时展示审批卡。
 
 | Claude tool | VibePet 预览 | 标题 |
 |---|---|---|
@@ -66,19 +67,19 @@ Claude Code 安装 12 个 hook key。安装器为每个 key 写入一个 VibePet
 
 | 用户操作 | VibePet response | 写回 Claude 的 hook output |
 |---|---|---|
-| `允许一次` | `.approval(.allowOnce)` | `permissionDecision: "allow"` |
-| `拒绝` | `.approval(.deny(reason: nil))` | `permissionDecision: "deny"` |
+| `允许一次` | `.approval(.allowOnce)` | `decision.behavior: "allow"` |
+| `拒绝` | `.approval(.deny(reason: nil))` | `decision.behavior: "deny"` |
 | 关闭/无法展示/defer | `.defer` | 空 stdout，退出 0，让 Claude 回到原生流程 |
 
-当前不展示“始终允许”。代码里有 `allowAlways` 数据结构，但 Claude `PreToolUse` 的持久允许机制未验证，所以 `ApprovalContent.alwaysAllow` 被设为 `nil`。
+当前不展示“始终允许”。代码里有 `allowAlways` 数据结构，但 Claude hook 的持久允许机制未验证，所以 `ApprovalContent.alwaysAllow` 被设为 `nil`。
 
 ### Claude AskUserQuestion
 
-`AskUserQuestion` 是 Claude 的特殊情况：它不是普通审批，而是挂在 `PreToolUse` 里的结构化提问工具。
+`AskUserQuestion` 是 Claude 的特殊情况：它不是普通审批，而是挂在 `PermissionRequest` 里的结构化提问工具。
 
 触发条件：
 
-- hook event 是 `PreToolUse`
+- hook event 是 `PermissionRequest`
 - `tool_name == "AskUserQuestion"`
 - `tool_input.questions` 能解析出可用问题
 
@@ -98,21 +99,20 @@ Claude Code 安装 12 个 hook key。安装器为每个 key 写入一个 VibePet
 
 | 用户操作 | VibePet response | 写回 Claude 的 hook output |
 |---|---|---|
-| 提交完整答案 | `.question(QuestionAnswer)` | `permissionDecision: "allow"` + `updatedInput.questions` + `updatedInput.answers` |
+| 提交完整答案 | `.question(QuestionAnswer)` | `decision.behavior: "allow"` + `decision.updatedInput.questions` + `decision.updatedInput.answers` |
 | 没有可用答案/关闭/defer | `.defer` | 空 stdout，退出 0，让 Claude 回到原生提问 |
 
 `updatedInput.answers` 以原始 question text 为 key；VibePet 内部的 `QuestionAnswer` 以 `header` 为 key，编码时会转换。UI 追加的 `其他` 选项不会写回 `updatedInput.questions`，只把用户输入作为答案值写回。
 
 ## Codex Hook
 
-Codex 安装 5 个 hook key。安装器把 hook 写入 `hooks.json`，并启用 `[features].hooks = true`。Codex 所有 managed group 都带 `statusMessage: "Managed by VibePet"` 以便卸载时精确移除。
+Codex 安装 4 个 hook key。安装器把 hook 写入 `hooks.json`，并启用 `[features].hooks = true`。Codex 所有 managed group 都带 `statusMessage: "Managed by VibePet"` 以便卸载时精确移除。
 
 | Hook | 触发时机 | VibePet 事件 | Bubble 展示 | 权限关系 | 宠物状态 |
 |---|---|---|---|---|---|
 | `SessionStart` | Codex 会话开始 | `sessionStarted` | `status` | 无 | 会话 running；新会话触发 greeting/waving |
 | `UserPromptSubmit` | 用户提交 prompt | `activityUpdated` | `status` | 无 | running |
 | `PermissionRequest` | Codex 需要权限 | `permissionRequested` | `approval` | 用户允许/拒绝/defer 后回传 Codex | waiting/decide |
-| `PostToolUse` | 工具执行后 | `activityUpdated` | `status` | 无 | running；不覆盖正在等待的权限/问题 |
 | `Stop` | 一轮任务结束 | `sessionCompleted` | `completion` | 无 | completed |
 
 Codex adapter 还兼容解析 `notify` program 的 `agent-turn-complete` payload，但 VibePet 当前安装走的是 `Stop` hook，不是 Codex notify program。
@@ -166,8 +166,8 @@ VibePet 内部把 hook payload 归一化为四类 `BubbleContent`：
 
 | BubbleContent | 是否需要响应 | 典型来源 |
 |---|---:|---|
-| `approval` | 是 | Claude `PreToolUse`；Codex `PermissionRequest` |
-| `question` | 是 | Claude `PreToolUse + AskUserQuestion` |
+| `approval` | 是 | Claude `PermissionRequest`；Codex `PermissionRequest` |
+| `question` | 是 | Claude `PermissionRequest + AskUserQuestion` |
 | `completion` | 否 | Claude `Stop` / `StopFailure` / `SessionEnd`；Codex `Stop` |
 | `status` | 否 | session/activity/notification 类 hook |
 

@@ -43,13 +43,13 @@ Define how `ClaudeCodeAdapter` normalizes Claude Code native hook events into `B
 
 `ClaudeCodeAdapter` SHALL normalize the full set of Claude Code lifecycle hooks into `AgentEvent`s keyed by `SourceInfo.sessionID`, in addition to producing `BridgeEnvelope` content where applicable:
 - `SessionStart` -> `sessionStarted`
-- `UserPromptSubmit`, `SubagentStart`, `SubagentStop`, `PreCompact`, `Notification` -> `activityUpdated`
-- `PreToolUse` (tool_name != `AskUserQuestion`) -> `permissionRequested` (alongside the existing `.approval` content)
-- `PreToolUse` with `AskUserQuestion` -> `questionAsked`
+- `UserPromptSubmit`, `PreToolUse`, `SubagentStart`, `SubagentStop`, `PreCompact`, `Notification` -> `activityUpdated`
+- `PermissionRequest` (tool_name != `AskUserQuestion`) -> `permissionRequested` (alongside `.approval` content)
+- `PermissionRequest` with `AskUserQuestion` -> `questionAsked`
 - `Stop` -> `sessionCompleted`; `StopFailure` -> `sessionCompleted` with the error flag; `SessionEnd` -> `sessionCompleted` with the session-end flag
 - `PermissionDenied` -> `actionableStateResolved`
 
-Only `PreToolUse`(decision) stays on the blocking decision channel; every other lifecycle hook SHALL be a fire-and-forget notification. Parsing SHALL be fail-open: a missing field or unknown event SHALL be logged and dropped, never thrown, so the tool is never blocked. When the payload lacks a displayable summary the adapter SHALL substitute a readable fallback rather than depending on Markdown.
+Only `PermissionRequest` stays on the blocking decision channel; lifecycle hooks are fire-and-forget notifications. Parsing SHALL be fail-open: a missing field or unknown event SHALL be logged and dropped, never thrown, so the tool is never blocked. When the payload lacks a displayable summary the adapter SHALL substitute a readable fallback rather than depending on Markdown.
 
 #### Scenario: SessionStart becomes sessionStarted
 
@@ -76,48 +76,48 @@ Only `PreToolUse`(decision) stays on the blocking decision channel; every other 
 - **WHEN** `parseEvent` is given a lifecycle event with missing or malformed fields
 - **THEN** it drops the event (logs a readable fallback) and returns without throwing, so the CLI exits cleanly
 
-### Requirement: Claude Code PreToolUse normalizes to approval
+### Requirement: Claude Code PermissionRequest normalizes to approval
 
-`ClaudeCodeAdapter` SHALL normalize a Claude Code `PreToolUse` event whose `tool_name` is not `AskUserQuestion` into `.approval` content, assembling an `ActionPreview` from `tool_input` by tool: `Bash` → `.command`, `Edit` / `Write` → `.fileChange`, `Read` → `.fileRead`, `WebFetch` → `.network`, and any other tool → `.generic`. It SHALL populate the approval's `alwaysAllow` from `tool_name` only when the allowAlways mechanism is verified supported (see "allowAlways support gated by schema verification"); otherwise `alwaysAllow` SHALL be `nil`.
+`ClaudeCodeAdapter` SHALL normalize a Claude Code `PermissionRequest` event whose `tool_name` is not `AskUserQuestion` into `.approval` content, assembling an `ActionPreview` from `tool_input` by tool: `Bash` → `.command`, `Edit` / `Write` → `.fileChange`, `Read` → `.fileRead`, `WebFetch` → `.network`, and any other tool → `.generic`. It SHALL populate the approval's `alwaysAllow` from `tool_name` only when the allowAlways mechanism is verified supported (see "allowAlways support gated by schema verification"); otherwise `alwaysAllow` SHALL be `nil`.
 
-#### Scenario: Bash PreToolUse becomes command approval
+#### Scenario: Bash PermissionRequest becomes command approval
 
-- **WHEN** `parseEvent` is given a `PreToolUse` event with `tool_name == "Bash"`
+- **WHEN** `parseEvent` is given a `PermissionRequest` event with `tool_name == "Bash"`
 - **THEN** it returns `.approval` whose `ActionPreview` is a `.command` built from the `tool_input` command
 
-#### Scenario: Edit and Write PreToolUse become file-change approval
+#### Scenario: Edit and Write PermissionRequest become file-change approval
 
-- **WHEN** `parseEvent` is given a `PreToolUse` event with `tool_name` of `Edit` or `Write`
+- **WHEN** `parseEvent` is given a `PermissionRequest` event with `tool_name` of `Edit` or `Write`
 - **THEN** it returns `.approval` whose `ActionPreview` is a `.fileChange` built from the `tool_input` path/diff
 
-#### Scenario: Read PreToolUse becomes file-read approval
+#### Scenario: Read PermissionRequest becomes file-read approval
 
-- **WHEN** `parseEvent` is given a `PreToolUse` event with `tool_name == "Read"`
+- **WHEN** `parseEvent` is given a `PermissionRequest` event with `tool_name == "Read"`
 - **THEN** it returns `.approval` whose `ActionPreview` is a `.fileRead` built from the `tool_input` path
 
-#### Scenario: WebFetch PreToolUse becomes network approval
+#### Scenario: WebFetch PermissionRequest becomes network approval
 
-- **WHEN** `parseEvent` is given a `PreToolUse` event with `tool_name == "WebFetch"`
+- **WHEN** `parseEvent` is given a `PermissionRequest` event with `tool_name == "WebFetch"`
 - **THEN** it returns `.approval` whose `ActionPreview` is a `.network` built from the `tool_input` URL
 
 #### Scenario: Unknown tool becomes generic approval
 
-- **WHEN** `parseEvent` is given a `PreToolUse` event whose `tool_name` is not a recognized preview kind
+- **WHEN** `parseEvent` is given a `PermissionRequest` event whose `tool_name` is not a recognized preview kind
 - **THEN** it returns `.approval` whose `ActionPreview` is `.generic`
 
 ### Requirement: Approval decision encodes to Claude Code permission output
 
-`ClaudeCodeAdapter.encodeResponse` SHALL encode approval decisions per Claude Code's hook output contract: `deny(reason:)` SHALL emit `{"hookSpecificOutput":{…,"permissionDecision":"deny","permissionDecisionReason":…}}`; `allowOnce` SHALL emit `permissionDecision:"allow"`; `defer` SHALL emit no JSON and `exit 0` (fail-open). The encoded bytes and exit semantics SHALL be unit-testable.
+`ClaudeCodeAdapter.encodeResponse` SHALL encode approval decisions per Claude Code's `PermissionRequest` hook output contract: `deny(reason:)` SHALL emit `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":…}}}`; `allowOnce` SHALL emit `decision.behavior:"allow"`; `defer` SHALL emit no JSON and `exit 0` (fail-open). The encoded bytes and exit semantics SHALL be unit-testable.
 
 #### Scenario: Deny emits a deny decision with reason
 
-- **WHEN** `encodeResponse` is given a `deny(reason:)` decision for a `PreToolUse` approval
-- **THEN** it produces hook output with `permissionDecision:"deny"` carrying the reason
+- **WHEN** `encodeResponse` is given a `deny(reason:)` decision for a `PermissionRequest` approval
+- **THEN** it produces hook output with `decision.behavior:"deny"` carrying the reason
 
 #### Scenario: Allow once emits an allow decision
 
 - **WHEN** `encodeResponse` is given an `allowOnce` decision
-- **THEN** it produces hook output with `permissionDecision:"allow"`
+- **THEN** it produces hook output with `decision.behavior:"allow"`
 
 #### Scenario: Defer emits no JSON and exits zero
 
@@ -140,11 +140,11 @@ The adapter's `allowAlways` handling SHALL be gated by a verified Claude Code pe
 
 ### Requirement: Claude Code AskUserQuestion normalizes to question
 
-`ClaudeCodeAdapter` SHALL normalize a Claude Code `PreToolUse` event whose `tool_name` is `AskUserQuestion` into `.question` content, mapping each entry of `tool_input.questions` to a `QuestionItem` (`prompt` from `question`, `header` from `header` with a fallback derived from the question text, `multiSelect` defaulting to `false`) and each option to a `QuestionOption` (`label`, `detail` from `description`, `allowsFreeform == false`). It SHALL append one synthetic free-text option (`label "其他"`, `allowsFreeform == true`) to every question, mirroring the "Other" choice the CLIs add client-side. It SHALL populate `SourceInfo` the same way as other events. This mechanism is verified supported (M5-0 spike, Claude Code ≥ 2.1.85). When `tool_input.questions` is missing or yields no usable item, parsing SHALL return `nil` (fail-open).
+`ClaudeCodeAdapter` SHALL normalize a Claude Code `PermissionRequest` event whose `tool_name` is `AskUserQuestion` into `.question` content, mapping each entry of `tool_input.questions` to a `QuestionItem` (`prompt` from `question`, `header` from `header` with a fallback derived from the question text, `multiSelect` defaulting to `false`) and each option to a `QuestionOption` (`label`, `detail` from `description`, `allowsFreeform == false`). It SHALL append one synthetic free-text option (`label "其他"`, `allowsFreeform == true`) to every question, mirroring the "Other" choice the CLIs add client-side. It SHALL populate `SourceInfo` the same way as other events. When `tool_input.questions` is missing or yields no usable item, parsing SHALL return `nil` (fail-open).
 
 #### Scenario: AskUserQuestion becomes question content
 
-- **WHEN** `parseEvent` is given a `PreToolUse` event with `tool_name == "AskUserQuestion"`
+- **WHEN** `parseEvent` is given a `PermissionRequest` event with `tool_name == "AskUserQuestion"`
 - **THEN** it returns a `BridgeEnvelope` with `.question` whose `questions` map from `tool_input.questions` with `header`, `prompt`, `multiSelect`, and per-option `label` / `detail`
 
 #### Scenario: Multi-select question preserves multiSelect
@@ -159,12 +159,12 @@ The adapter's `allowAlways` handling SHALL be gated by a verified Claude Code pe
 
 ### Requirement: Question answer encodes to updatedInput prefill
 
-`ClaudeCodeAdapter.encodeResponse` SHALL encode a `.question(QuestionAnswer)` response as Claude Code hook output with `permissionDecision:"allow"` and an `updatedInput` carrying the questions plus the user's `answers` keyed by question text (translated from `QuestionAnswer`, which is keyed by `header`), so the tool proceeds without prompting natively. The rebuilt `updatedInput.questions` SHALL exclude the synthetic "其他" option so the tool's question schema is unchanged. When the answer carries no usable selection, or the response is `.defer`, it SHALL emit no JSON and `exit 0` (fail-open). The encoded bytes and exit semantics SHALL be unit-testable.
+`ClaudeCodeAdapter.encodeResponse` SHALL encode a `.question(QuestionAnswer)` response as Claude Code `PermissionRequest` hook output with `decision.behavior:"allow"` and a `decision.updatedInput` carrying the questions plus the user's `answers` keyed by question text (translated from `QuestionAnswer`, which is keyed by `header`). The rebuilt `updatedInput.questions` SHALL exclude the synthetic "其他" option so the tool's question schema is unchanged. When the answer carries no usable selection, or the response is `.defer`, it SHALL emit no JSON and `exit 0` (fail-open). The encoded bytes and exit semantics SHALL be unit-testable.
 
 #### Scenario: Question answer emits allow with updatedInput
 
 - **WHEN** `encodeResponse` is given a `.question(QuestionAnswer)` with at least one selection
-- **THEN** it produces hook output with `permissionDecision:"allow"` and an `updatedInput` whose `answers` are keyed by question text and whose `questions` are preserved without the synthetic "其他" option
+- **THEN** it produces hook output with `decision.behavior:"allow"` and a `decision.updatedInput` whose `answers` are keyed by question text and whose `questions` are preserved without the synthetic "其他" option
 
 #### Scenario: Empty answer defers with no JSON
 
