@@ -10,6 +10,10 @@ final class ApprovalPresentation: ObservableObject {
     init(pendingCount: Int) {
         self.pendingCount = pendingCount
     }
+
+    nonisolated static func peekCount(for pendingCount: Int) -> Int {
+        min(max(pendingCount, 0), 2)
+    }
 }
 
 /// Renders the front approval card with up to two cards peeking a thin edge behind
@@ -30,7 +34,7 @@ struct BubbleStackView<Front: View>: View {
         self.front = front()
     }
 
-    private var peekCount: Int { min(presentation.pendingCount, 2) }
+    private var peekCount: Int { ApprovalPresentation.peekCount(for: presentation.pendingCount) }
 
     var body: some View {
         ZStack {

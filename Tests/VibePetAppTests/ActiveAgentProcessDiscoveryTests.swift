@@ -325,6 +325,7 @@ private final class DiscoveryTestPetSurface: PetSurface {
     func presentQuestion(
         content: QuestionContent,
         source: SourceInfo,
+        conversationContext: QuestionConversationContext?,
         placement: BubbleAnchor.Placement,
         pendingCount: Int,
         onJump: @escaping (JumpTarget) -> Void,

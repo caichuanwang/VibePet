@@ -38,7 +38,13 @@ final class PetWindowSurface: PetSurface {
     }
 
     var visibleFrame: CGRect {
-        NSScreen.main?.visibleFrame ?? .zero
+        // Anchor bubbles to the screen the pet actually lives on. `NSScreen.main`
+        // is the *focused* screen (the one with the key window), so on multi-monitor
+        // setups it clamps the bubble onto the wrong display instead of above the
+        // pet. The pet window's own `screen` is the display it mostly occupies.
+        windowController?.window?.screen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? .zero
     }
 
     func renderPet(asset: PetAsset?, activity: PetActivity) {
@@ -72,7 +78,7 @@ final class PetWindowSurface: PetSurface {
         let window = BubbleWindow(contentRect: frame)
         window.contentViewController = NSHostingController(rootView: PetSwitchTooltip(name: name))
         window.setFrame(frame, display: true)
-        window.orderFront(nil)
+        window.orderFrontRegardless()
         petSwitchTooltipWindow = window
 
         Task { @MainActor [weak self, weak window] in
@@ -111,7 +117,7 @@ final class PetWindowSurface: PetSurface {
         let window = BubbleWindow(contentRect: placement.frame)
         window.contentViewController = NSHostingController(rootView: bubble)
         window.setFrame(placement.frame, display: true)
-        window.orderFront(nil)
+        window.orderFrontRegardless()
         bubbleWindow = window
     }
 
@@ -175,10 +181,13 @@ final class PetWindowSurface: PetSurface {
         }
 
         // Interactive: must become key for buttons + keyboard shortcuts to work.
+        // `orderFrontRegardless` + `makeKey` shows it on the active Space (incl. a
+        // full-screen app's Space) without activating the app and switching Spaces.
         let window = BubbleWindow(contentRect: finalPlacement.frame, interactive: true)
         window.contentViewController = NSHostingController(rootView: stack)
         window.setFrame(finalPlacement.frame, display: true)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        window.makeKey()
         bubbleWindow = window
     }
 
@@ -187,6 +196,7 @@ final class PetWindowSurface: PetSurface {
     func presentQuestion(
         content: QuestionContent,
         source: SourceInfo,
+        conversationContext: QuestionConversationContext?,
         placement: BubbleAnchor.Placement,
         pendingCount: Int,
         onJump: @escaping (JumpTarget) -> Void,
@@ -203,6 +213,7 @@ final class PetWindowSurface: PetSurface {
             for: QuestionCard(
                 content: content,
                 source: source,
+                conversationContext: conversationContext,
                 tailEdge: measuringEdge,
                 tailOffsetX: 0,
                 presentation: presentation,
@@ -225,6 +236,7 @@ final class PetWindowSurface: PetSurface {
             QuestionCard(
                 content: content,
                 source: source,
+                conversationContext: conversationContext,
                 tailEdge: tailEdge,
                 tailOffsetX: tailOffsetX,
                 presentation: presentation,
@@ -234,10 +246,13 @@ final class PetWindowSurface: PetSurface {
         }
 
         // Interactive: must become key for option taps + ⌘↩ submit to work.
+        // `orderFrontRegardless` + `makeKey` shows it on the active Space (incl. a
+        // full-screen app's Space) without activating the app and switching Spaces.
         let window = BubbleWindow(contentRect: finalPlacement.frame, interactive: true)
         window.contentViewController = NSHostingController(rootView: stack)
         window.setFrame(finalPlacement.frame, display: true)
-        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        window.makeKey()
         bubbleWindow = window
     }
 
@@ -283,7 +298,7 @@ final class PetWindowSurface: PetSurface {
         let window = badgeWindow ?? BubbleWindow(contentRect: frame)
         window.contentViewController = NSHostingController(rootView: badge)
         window.setFrame(frame, display: true)
-        window.orderFront(nil)
+        window.orderFrontRegardless()
         badgeWindow = window
     }
 }
@@ -321,21 +336,29 @@ private struct PetSwitchTooltip: View {
     }
 }
 
-/// Borderless, transparent, floating window that hosts a bubble. Notification
+/// Borderless, transparent, floating panel that hosts a bubble. Notification
 /// bubbles never become key (so they don't steal focus from the editor/terminal);
 /// the interactive approval card must become key so its buttons and keyboard
 /// shortcuts (esc / ⌘↩) work.
-private final class BubbleWindow: NSWindow {
+///
+/// This is a `.nonactivatingPanel` (not a plain `NSWindow`) so it can become key
+/// for its controls *without activating the app*. A regular window made key while a
+/// full-screen app is frontmost forces macOS to switch back to the desktop Space —
+/// which previously stranded the question/approval bubble on the wrong Space instead
+/// of floating it over the full-screen app (matching the pet panel's behavior).
+private final class BubbleWindow: NSPanel {
     private let interactive: Bool
 
     init(contentRect: CGRect, interactive: Bool = false) {
         self.interactive = interactive
         super.init(
             contentRect: contentRect,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
+        isFloatingPanel = true
+        hidesOnDeactivate = false
         isOpaque = false
         backgroundColor = .clear
         level = .floating

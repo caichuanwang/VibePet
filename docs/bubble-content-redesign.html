@@ -1,0 +1,1183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>VibePet Bubble Content Redesign</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #14171b;
+      --desk: #1c2026;
+      --panel: rgba(28, 31, 36, 0.94);
+      --panel-strong: rgba(38, 42, 49, 0.96);
+      --line: rgba(255, 255, 255, 0.14);
+      --line-soft: rgba(255, 255, 255, 0.09);
+      --text: rgba(255, 255, 255, 0.92);
+      --muted: rgba(255, 255, 255, 0.58);
+      --faint: rgba(255, 255, 255, 0.38);
+      --green: #4fc979;
+      --blue: #62b4ff;
+      --orange: #ffb04f;
+      --red: #ff6b6b;
+      --purple: #b48cff;
+      --radius: 8px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.35), 0 8px 18px rgba(0, 0, 0, 0.2);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0) 38%),
+        var(--bg);
+      color: var(--text);
+    }
+
+    .page {
+      width: min(1180px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 32px 0 44px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      line-height: 1.15;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 0;
+      max-width: 720px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .legend {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.05);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    .dot.orange { background: var(--orange); }
+    .dot.blue { background: var(--blue); }
+    .dot.red { background: var(--red); }
+
+    .stage {
+      display: grid;
+      grid-template-columns: minmax(280px, 390px) minmax(440px, 1fr);
+      gap: 28px;
+      align-items: start;
+    }
+
+    .notes {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.045);
+      padding: 16px;
+    }
+
+    .notes h2 {
+      margin: 0 0 10px;
+      font-size: 15px;
+      font-weight: 680;
+    }
+
+    .notes ol {
+      margin: 0;
+      padding-left: 19px;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .notes li + li {
+      margin-top: 8px;
+    }
+
+    .scene {
+      min-height: 720px;
+      border: 1px solid var(--line-soft);
+      border-radius: 12px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.01)),
+        var(--desk);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+      padding: 26px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .window-hint {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      color: var(--faint);
+      background: rgba(0,0,0,0.18);
+      margin-bottom: 24px;
+      font-size: 12px;
+    }
+
+    .mac-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #ff5f57;
+    }
+
+    .mac-dot.yellow { background: #ffbd2e; }
+    .mac-dot.green { background: #28c840; }
+
+    .pet-row {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+
+    .pet {
+      width: 86px;
+      height: 86px;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px 8px 18px 18px;
+      background:
+        radial-gradient(circle at 50% 30%, rgba(255,255,255,0.18), rgba(255,255,255,0) 48%),
+        linear-gradient(180deg, #4b6f69, #293b40);
+      position: relative;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.26);
+    }
+
+    .pet::before,
+    .pet::after {
+      content: "";
+      position: absolute;
+      top: 30px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #0d1114;
+    }
+
+    .pet::before { left: 27px; }
+    .pet::after { right: 27px; }
+
+    .pet-mouth {
+      position: absolute;
+      left: 34px;
+      top: 46px;
+      width: 18px;
+      height: 8px;
+      border-bottom: 2px solid rgba(13,17,20,0.8);
+      border-radius: 0 0 18px 18px;
+    }
+
+    .bubble {
+      width: min(430px, 100%);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .bubble::before {
+      content: "";
+      position: absolute;
+      left: -9px;
+      bottom: 22px;
+      width: 18px;
+      height: 18px;
+      transform: rotate(45deg);
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .bubble + .bubble {
+      margin-top: 18px;
+    }
+
+    .bubble.attention {
+      border-color: rgba(255, 176, 79, 0.55);
+    }
+
+    .bubble.question {
+      border-color: rgba(98, 180, 255, 0.48);
+    }
+
+    .bubble-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px 12px 10px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .identity {
+      min-width: 0;
+    }
+
+    .source-line {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      margin-bottom: 4px;
+    }
+
+    .tool-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      background: rgba(98, 180, 255, 0.16);
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 760;
+      flex: 0 0 auto;
+    }
+
+    .tool-mark.claude {
+      background: rgba(255, 176, 79, 0.14);
+      color: var(--orange);
+    }
+
+    .project {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 690;
+      line-height: 1.25;
+    }
+
+    .meta-line {
+      display: flex;
+      gap: 7px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .meta-line span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid rgba(79, 201, 121, 0.34);
+      border-radius: 999px;
+      color: rgba(174, 255, 205, 0.96);
+      background: rgba(79, 201, 121, 0.12);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .status-chip.attn {
+      border-color: rgba(255, 176, 79, 0.38);
+      color: #ffd39a;
+      background: rgba(255, 176, 79, 0.12);
+    }
+
+    .status-chip.ask {
+      border-color: rgba(98, 180, 255, 0.38);
+      color: #bfe1ff;
+      background: rgba(98, 180, 255, 0.12);
+    }
+
+    .bubble-body {
+      padding: 12px;
+    }
+
+    .turns {
+      display: grid;
+      gap: 9px;
+    }
+
+    .turn {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: 9px;
+      align-items: start;
+    }
+
+    .speaker {
+      color: var(--faint);
+      font-size: 12px;
+      line-height: 1.35;
+      padding-top: 1px;
+    }
+
+    .turn-text {
+      min-width: 0;
+      color: rgba(255,255,255,0.88);
+      line-height: 1.45;
+    }
+
+    .turn-text.muted {
+      color: var(--muted);
+    }
+
+    .context-soft .speaker,
+    .context-soft .turn-text {
+      color: rgba(255,255,255,0.42);
+    }
+
+    .context-soft {
+      gap: 6px;
+    }
+
+    .clamp {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .activity {
+      margin-top: 12px;
+      border-top: 1px solid var(--line-soft);
+      padding-top: 11px;
+    }
+
+    .approval-focus .activity {
+      margin-top: 0;
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .approval-focus .section-title {
+      color: rgba(255,255,255,0.78);
+      font-weight: 680;
+    }
+
+    .approval-focus .codebox {
+      border-color: rgba(255, 176, 79, 0.34);
+      background: rgba(255, 176, 79, 0.08);
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .risk {
+      color: #ffd39a;
+      font-weight: 680;
+    }
+
+    .risk.high {
+      color: #ffb2b2;
+    }
+
+    .codebox {
+      margin: 0;
+      padding: 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      background: rgba(0,0,0,0.22);
+      color: rgba(255,255,255,0.9);
+      font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.42;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .question-block {
+      display: grid;
+      gap: 10px;
+    }
+
+    .question-item {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 7px;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .question-item-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .question-count {
+      font-weight: 680;
+      color: rgba(255,255,255,0.72);
+    }
+
+    .question-kind {
+      color: rgba(255,255,255,0.42);
+      white-space: nowrap;
+    }
+
+    .answer-box {
+      display: grid;
+      gap: 6px;
+    }
+
+    .answer-box label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .answer-input {
+      width: 100%;
+      min-height: 64px;
+      resize: vertical;
+      border: 1px solid rgba(98, 180, 255, 0.28);
+      border-radius: 6px;
+      padding: 8px 9px;
+      color: rgba(255,255,255,0.9);
+      background: rgba(0,0,0,0.22);
+      font: inherit;
+      line-height: 1.4;
+      outline: none;
+    }
+
+    .answer-input::placeholder {
+      color: rgba(255,255,255,0.34);
+    }
+
+    .question-title {
+      margin: 0;
+      font-weight: 690;
+      line-height: 1.4;
+    }
+
+    .question-pager {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .pager-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pager-button {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      min-height: 28px;
+      padding: 0;
+      border-radius: 50%;
+    }
+
+    .pager-dots {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .pager-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.2);
+    }
+
+    .pager-dot.done {
+      background: rgba(98, 180, 255, 0.62);
+    }
+
+    .pager-dot.current {
+      width: 18px;
+      background: var(--blue);
+    }
+
+    .answered-strip {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .answered-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: rgba(98, 180, 255, 0.09);
+      border: 1px solid rgba(98, 180, 255, 0.16);
+      color: rgba(255,255,255,0.52);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .option-list {
+      display: grid;
+      gap: 7px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .option {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      min-height: 34px;
+      padding: 7px 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      background: rgba(255,255,255,0.045);
+    }
+
+    .radio {
+      width: 14px;
+      height: 14px;
+      margin-top: 2px;
+      border: 1px solid rgba(255,255,255,0.38);
+      border-radius: 50%;
+      position: relative;
+    }
+
+    .check {
+      width: 14px;
+      height: 14px;
+      margin-top: 2px;
+      border: 1px solid rgba(255,255,255,0.38);
+      border-radius: 4px;
+      position: relative;
+    }
+
+    .option.selected {
+      border-color: rgba(98, 180, 255, 0.38);
+      background: rgba(98, 180, 255, 0.09);
+    }
+
+    .option.selected .radio::after {
+      content: "";
+      position: absolute;
+      inset: 3px;
+      border-radius: 50%;
+      background: var(--blue);
+    }
+
+    .option.selected .check::after {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 1px;
+      width: 6px;
+      height: 9px;
+      border-right: 2px solid var(--blue);
+      border-bottom: 2px solid var(--blue);
+      transform: rotate(42deg);
+    }
+
+    .option b {
+      display: block;
+      margin-bottom: 2px;
+      font-weight: 650;
+    }
+
+    .option span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .button-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--line-soft);
+      background: rgba(0,0,0,0.11);
+    }
+
+    .jump-action {
+      display: flex;
+      align-items: center;
+      flex: 0 0 auto;
+    }
+
+    .agent-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 9px;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .pending {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    button {
+      min-height: 28px;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 6px;
+      padding: 0 10px;
+      color: rgba(255,255,255,0.88);
+      background: rgba(255,255,255,0.07);
+      font: inherit;
+      font-size: 13px;
+    }
+
+    button.primary {
+      border-color: rgba(98, 180, 255, 0.52);
+      background: rgba(98, 180, 255, 0.2);
+      color: #d8efff;
+    }
+
+    button.danger {
+      border-color: rgba(255, 107, 107, 0.42);
+      color: #ffd2d2;
+      background: rgba(255, 107, 107, 0.1);
+    }
+
+    button.trust {
+      border-color: rgba(79, 201, 121, 0.42);
+      color: #c9ffd9;
+      background: rgba(79, 201, 121, 0.1);
+    }
+
+    button[disabled] {
+      opacity: 0.42;
+    }
+
+    .collapsed {
+      width: min(430px, 100%);
+      margin-left: 108px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.045);
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .mobile-preview {
+      margin-top: 24px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .mobile-shell {
+      width: min(330px, 100%);
+      border: 1px solid var(--line-soft);
+      border-radius: 18px;
+      padding: 14px;
+      background: rgba(0,0,0,0.18);
+    }
+
+    .mobile-shell .pet-row {
+      grid-template-columns: 64px minmax(0, 1fr);
+      gap: 12px;
+      margin-bottom: 0;
+    }
+
+    .mobile-shell .pet {
+      width: 62px;
+      height: 62px;
+    }
+
+    .mobile-shell .pet::before,
+    .mobile-shell .pet::after {
+      top: 23px;
+    }
+
+    .mobile-shell .pet::before { left: 19px; }
+    .mobile-shell .pet::after { right: 19px; }
+
+    .mobile-shell .pet-mouth {
+      left: 24px;
+      top: 35px;
+      width: 14px;
+    }
+
+    .mobile-shell .bubble {
+      width: 100%;
+    }
+
+    .mobile-shell .turn {
+      grid-template-columns: 42px minmax(0, 1fr);
+    }
+
+    .mobile-shell .button-row {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .mobile-shell .jump-action,
+    .mobile-shell .agent-actions {
+      align-items: stretch;
+      justify-content: stretch;
+    }
+
+    .mobile-shell .agent-actions {
+      flex-direction: column;
+    }
+
+    .mobile-shell .buttons {
+      justify-content: stretch;
+    }
+
+    .mobile-shell button {
+      flex: 1 1 auto;
+    }
+
+    @media (max-width: 900px) {
+      .topbar,
+      .stage {
+        display: block;
+      }
+
+      .legend {
+        justify-content: flex-start;
+        margin-top: 16px;
+      }
+
+      .notes {
+        margin-bottom: 22px;
+      }
+
+      .scene {
+        padding: 18px;
+      }
+
+      .pet-row {
+        grid-template-columns: 74px minmax(0, 1fr);
+      }
+
+      .pet {
+        width: 70px;
+        height: 70px;
+      }
+
+      .bubble {
+        width: 100%;
+      }
+
+      .collapsed {
+        margin-left: 86px;
+        width: calc(100% - 86px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div>
+        <h1>VibePet 气泡内容重设计</h1>
+        <p class="subtitle">参考 open-vibe-island 的 session spotlight 思路：气泡先说明“哪个项目的哪个会话”，再并列展示用户输入与 agent 输出，最后把审批、跳回终端、提问提交收束到稳定按钮区。</p>
+      </div>
+      <div class="legend" aria-label="状态图例">
+        <span class="pill"><span class="dot"></span>运行</span>
+        <span class="pill"><span class="dot orange"></span>待审批</span>
+        <span class="pill"><span class="dot blue"></span>待回答</span>
+      </div>
+    </header>
+
+    <section class="stage">
+      <aside class="notes">
+        <h2>信息层级</h2>
+        <ol>
+          <li><strong>来源栏：</strong>工具、项目名、session、终端位置、更新时间。项目名成为第一眼锚点。</li>
+          <li><strong>上下文：</strong>运行态展示用户/Agent 摘要；审批态省略；Question 态仅弱化保留。</li>
+          <li><strong>当前事件：</strong>审批突出请求执行；Question 一屏只展示一个问题，多题用左右切换。</li>
+          <li><strong>按钮区：</strong>运行态无按钮栏；交互态左侧“回终端”，右侧放审批/提交动作。</li>
+        </ol>
+      </aside>
+
+      <div class="scene">
+        <div class="window-hint">
+          <span class="mac-dot"></span>
+          <span class="mac-dot yellow"></span>
+          <span class="mac-dot green"></span>
+          <span>Terminal · ~/Documents/GitHub/VibePet</span>
+        </div>
+
+        <div class="pet-row">
+          <div class="pet" aria-hidden="true"><span class="pet-mouth"></span></div>
+          <article class="bubble" aria-label="运行中的气泡">
+            <header class="bubble-head">
+              <div class="identity">
+                <div class="source-line">
+                  <span class="tool-mark">C</span>
+                  <span class="project">VibePet</span>
+                </div>
+                <div class="meta-line">
+                  <span>Codex</span>
+                  <span>·</span>
+                  <span>main</span>
+                  <span>·</span>
+                  <span>#9f8e7d</span>
+                  <span>·</span>
+                  <span>Ghostty</span>
+                </div>
+              </div>
+              <span class="status-chip"><span class="dot"></span>Live · Patch</span>
+            </header>
+            <div class="bubble-body">
+              <div class="turns">
+                <div class="turn">
+                  <div class="speaker">用户</div>
+                  <div class="turn-text clamp">参考 open-vibe-island，重新设计气泡内容：项目名称、用户输入、agent 输出、按钮区和 AskUserQuestion。</div>
+                </div>
+                <div class="turn">
+                  <div class="speaker">Agent</div>
+                  <div class="turn-text clamp">正在整理 BubbleContent 与 SessionState 可用字段，准备输出一版 HTML 视觉稿。</div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="pet-row">
+          <div></div>
+          <article class="bubble attention" aria-label="审批气泡">
+            <header class="bubble-head">
+              <div class="identity">
+                <div class="source-line">
+                  <span class="tool-mark claude">A</span>
+                  <span class="project">VibePet</span>
+                </div>
+                <div class="meta-line">
+                  <span>Claude Code</span>
+                  <span>·</span>
+                  <span>feature/bubble-redesign</span>
+                  <span>·</span>
+                  <span>#a1b2c3</span>
+                </div>
+              </div>
+              <span class="status-chip attn"><span class="dot orange"></span>Approval</span>
+            </header>
+            <div class="bubble-body approval-focus">
+              <div class="activity">
+                <div class="section-title">
+                  <span>请求执行</span>
+                  <span class="risk">中风险</span>
+                </div>
+                <pre class="codebox">swift test --filter BubbleQueueTests
+swift test --filter QuestionCardTests</pre>
+              </div>
+            </div>
+            <footer class="button-row">
+              <div class="jump-action">
+                <button>回终端</button>
+              </div>
+              <div class="agent-actions">
+                <span class="pending">还有 2 个待处理</span>
+                <div class="buttons">
+                  <button class="danger">拒绝</button>
+                  <button class="primary">允许一次</button>
+                  <button class="trust">始终允许</button>
+                </div>
+              </div>
+            </footer>
+          </article>
+        </div>
+
+        <div class="pet-row">
+          <div></div>
+          <article class="bubble question" aria-label="AskUserQuestion 气泡">
+            <header class="bubble-head">
+              <div class="identity">
+                <div class="source-line">
+                  <span class="tool-mark claude">A</span>
+                  <span class="project">VibePet</span>
+                </div>
+                <div class="meta-line">
+                  <span>Claude Code</span>
+                  <span>·</span>
+                  <span>~/Documents/GitHub/VibePet</span>
+                  <span>·</span>
+                  <span>#a1b2c3</span>
+                </div>
+              </div>
+              <span class="status-chip ask"><span class="dot blue"></span>Question</span>
+            </header>
+            <div class="bubble-body">
+              <div class="turns context-soft">
+                <div class="turn">
+                  <div class="speaker">用户</div>
+                  <div class="turn-text clamp">先用 HTML 设计一版我看看。</div>
+                </div>
+                <div class="turn">
+                  <div class="speaker">Agent</div>
+                  <div class="turn-text muted clamp">我可以按更紧凑或更完整的方式组织气泡内容。</div>
+                </div>
+              </div>
+              <div class="activity question-block">
+                <p class="question-title">这版气泡更应该优先服务哪种场景？</p>
+                <ul class="option-list">
+                  <li class="option selected">
+                    <span class="radio"></span>
+                    <span><b>快速决策</b><span>一眼看到风险、命令和允许/拒绝。</span></span>
+                  </li>
+                  <li class="option">
+                    <span class="radio"></span>
+                    <span><b>会话追踪</b><span>更强调用户输入与 agent 输出的连续性。</span></span>
+                  </li>
+                  <li class="option">
+                    <span class="radio"></span>
+                    <span><b>其他</b><span>选择后显示一行自由输入。</span></span>
+                  </li>
+                </ul>
+                <div class="answer-box">
+                  <label for="question-answer">我的回答</label>
+                  <textarea class="answer-input" id="question-answer">优先快速决策，但保留用户输入和 Agent 输出作为上下文。</textarea>
+                </div>
+              </div>
+            </div>
+            <footer class="button-row">
+              <div class="jump-action">
+                <button>回终端</button>
+              </div>
+              <div class="agent-actions">
+                <span class="pending">需要回答后继续</span>
+                <div class="buttons">
+                  <button>稍后</button>
+                  <button class="primary">提交回答</button>
+                </div>
+              </div>
+            </footer>
+          </article>
+        </div>
+
+        <div class="pet-row">
+          <div></div>
+          <article class="bubble question" aria-label="多个 AskUserQuestion 气泡">
+            <header class="bubble-head">
+              <div class="identity">
+                <div class="source-line">
+                  <span class="tool-mark claude">A</span>
+                  <span class="project">VibePet</span>
+                </div>
+                <div class="meta-line">
+                  <span>Claude Code</span>
+                  <span>·</span>
+                  <span>feature/bubble-redesign</span>
+                  <span>·</span>
+                  <span>#a1b2c3</span>
+                </div>
+              </div>
+              <span class="status-chip ask"><span class="dot blue"></span>Questions · 3</span>
+            </header>
+            <div class="bubble-body">
+              <div class="turns context-soft">
+                <div class="turn">
+                  <div class="speaker">用户</div>
+                  <div class="turn-text clamp">这个气泡要能处理 AskUserQuestion 一次带多个问题的情况。</div>
+                </div>
+                <div class="turn">
+                  <div class="speaker">Agent</div>
+                  <div class="turn-text muted clamp">我需要你确认展示密度、保留哪些上下文，以及补充说明。</div>
+                </div>
+              </div>
+              <div class="activity question-block">
+                <div class="question-pager">
+                  <div>
+                    <div class="question-count">问题 3 / 3</div>
+                    <div class="question-kind">最后一题 · 自由输入</div>
+                  </div>
+                  <div class="pager-controls" aria-label="问题切换">
+                    <button class="pager-button">‹</button>
+                    <div class="pager-dots" aria-hidden="true">
+                      <span class="pager-dot done"></span>
+                      <span class="pager-dot done"></span>
+                      <span class="pager-dot current"></span>
+                    </div>
+                    <button class="pager-button" disabled>›</button>
+                  </div>
+                </div>
+                <div class="answered-strip" aria-label="已回答摘要">
+                  <span class="answered-pill">1: 紧凑</span>
+                  <span class="answered-pill">2: 用户输入 + Agent 输出</span>
+                </div>
+                <section class="question-item">
+                  <p class="question-title">还有什么约束要告诉 agent？</p>
+                  <div class="answer-box">
+                    <label for="question-answer-multi">补充说明</label>
+                    <textarea class="answer-input" id="question-answer-multi">保持气泡感，不要变成完整面板；多问题时通过左右按钮逐题查看，最后一题再提交全部回答。</textarea>
+                  </div>
+                </section>
+              </div>
+            </div>
+            <footer class="button-row">
+              <div class="jump-action">
+                <button>回终端</button>
+              </div>
+              <div class="agent-actions">
+                <span class="pending">3 个问题需要回答</span>
+                <div class="buttons">
+                  <button>稍后</button>
+                  <button class="primary">提交全部回答</button>
+                </div>
+              </div>
+            </footer>
+          </article>
+        </div>
+
+        <div class="collapsed">
+          <span>Codex · VibePet · #6d29af</span>
+          <span>Completed · 3m</span>
+        </div>
+
+        <div class="mobile-preview">
+          <div class="section-title">
+            <span>窄宽度表现</span>
+            <span>按钮自动换行</span>
+          </div>
+          <div class="mobile-shell">
+            <div class="pet-row">
+              <div class="pet" aria-hidden="true"><span class="pet-mouth"></span></div>
+              <article class="bubble question" aria-label="窄宽度 AskUserQuestion 气泡">
+                <header class="bubble-head">
+                  <div class="identity">
+                    <div class="source-line">
+                      <span class="tool-mark claude">A</span>
+                      <span class="project">VibePet</span>
+                    </div>
+                    <div class="meta-line">
+                      <span>Claude Code</span>
+                      <span>·</span>
+                      <span>#a1b2c3</span>
+                    </div>
+                  </div>
+                  <span class="status-chip ask">Questions · 3</span>
+                </header>
+                <div class="bubble-body">
+                  <div class="turns context-soft">
+                    <div class="turn">
+                      <div class="speaker">用户</div>
+                      <div class="turn-text clamp">先用 HTML 设计一版我看看。</div>
+                    </div>
+                    <div class="turn">
+                      <div class="speaker">Agent</div>
+                      <div class="turn-text muted clamp">等待你确认多个问题中的当前项。</div>
+                    </div>
+                  </div>
+                  <div class="activity question-block">
+                    <div class="question-pager">
+                      <div>
+                        <div class="question-count">问题 2 / 3</div>
+                        <div class="question-kind">多选</div>
+                      </div>
+                      <div class="pager-controls">
+                        <button class="pager-button">‹</button>
+                        <div class="pager-dots">
+                          <span class="pager-dot done"></span>
+                          <span class="pager-dot current"></span>
+                          <span class="pager-dot"></span>
+                        </div>
+                        <button class="pager-button">›</button>
+                      </div>
+                    </div>
+                    <p class="question-title">气泡里必须保留哪些信息？</p>
+                  </div>
+                </div>
+                <footer class="button-row">
+                  <div class="jump-action">
+                    <button>回终端</button>
+                  </div>
+                  <div class="agent-actions">
+                    <span class="pending">继续回答后提交</span>
+                    <div class="buttons">
+                      <button class="primary">下一题</button>
+                    </div>
+                  </div>
+                </footer>
+              </article>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

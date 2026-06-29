@@ -1,8 +1,5 @@
-# approval-card Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change implement-m4-approval-loop. Update Purpose after archive.
-## Requirements
 ### Requirement: Three-section approval card layout
 
 `VibePetApp` SHALL provide an `ApprovalCard` that renders `.approval` content as a decision-first card: a header showing the source (`tool · projectName · sessionShortId`) and a risk indicator, a body focused on the compact `ActionPreview`, and a footer with a left-side terminal jump affordance plus right-side decision buttons. The approval body SHALL NOT render user prompt or agent output conversation context; the requested action preview is the primary content. When the source carries a jump target, double-clicking the non-control card body SHALL invoke the injected terminal jump action once without changing the footer action behavior.
@@ -26,20 +23,6 @@ TBD - created by archiving change implement-m4-approval-loop. Update Purpose aft
 
 - **WHEN** an approval card with a source jump target is double-clicked on its body outside footer controls
 - **THEN** the injected terminal jump action is invoked once with that jump target
-
-### Requirement: Risk-driven styling and default focus
-
-`ApprovalCard` SHALL set coloring and default keyboard focus by `risk`. `.high` SHALL default focus to "Deny" and SHALL require an explicit click/confirmation to allow; lower-risk levels MAY style differently but allowing SHALL still require an explicit action. Dangerous commands SHALL be highlighted (red), and a command body longer than 3 lines SHALL be truncated with the remainder elided.
-
-#### Scenario: High risk defaults focus to deny
-
-- **WHEN** an `.approval` with `risk == .high` is presented
-- **THEN** the default focus is on "Deny" and allowing requires an explicit click
-
-#### Scenario: Dangerous command is highlighted and truncated
-
-- **WHEN** the command preview is flagged dangerous and exceeds 3 lines
-- **THEN** it is shown in alert (red) styling and truncated past 3 lines
 
 ### Requirement: Action buttons and keyboard shortcuts
 
@@ -81,10 +64,10 @@ TBD - created by archiving change implement-m4-approval-loop. Update Purpose aft
 
 #### Scenario: Handle in terminal jumps and defers
 
-- **WHEN** the user activates "Handle in terminal" on a terminal-approval card with a source jump target
+- **WHEN** the user activates the terminal-handling affordance on a terminal-approval card with a source jump target
 - **THEN** the card invokes the terminal jump action and resolves as a `defer` so the tool uses its native approval flow
 
 #### Scenario: Resolving terminal approval without a jump target defers to native flow
 
-- **WHEN** the user activates "Handle in terminal" or dismisses the terminal-approval card and no jump target is available
+- **WHEN** the user activates the terminal-handling affordance or dismisses the terminal-approval card and no jump target is available
 - **THEN** the request resolves as a `defer` so the tool uses its native approval flow

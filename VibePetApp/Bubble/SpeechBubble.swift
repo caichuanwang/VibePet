@@ -14,6 +14,16 @@ struct SpeechBubble: View {
         case bottom
     }
 
+    struct LayoutProjection: Equatable {
+        let sourceLabel: String
+        let bodyText: String
+        let hasSourceHeader: Bool
+        let hasFooter: Bool
+        let supportsBodyJumpBack: Bool
+        let pausesAutoDismissOnHover: Bool
+        let autoDismissSeconds: Double
+    }
+
     let content: BubbleContent
     let source: SourceInfo
     var tailEdge: TailEdge = .bottom
@@ -30,14 +40,67 @@ struct SpeechBubble: View {
         }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            header
-            bodyContent
+    nonisolated static func layoutProjection(for content: BubbleContent, source: SourceInfo) -> LayoutProjection {
+        LayoutProjection(
+            sourceLabel: sourceLabel(for: source),
+            bodyText: bodyText(for: content),
+            hasSourceHeader: true,
+            hasFooter: false,
+            supportsBodyJumpBack: source.jumpTarget != nil,
+            pausesAutoDismissOnHover: true,
+            autoDismissSeconds: autoDismissSeconds(for: content)
+        )
+    }
+
+    nonisolated static func sourceLabel(for source: SourceInfo) -> String {
+        [toolName(for: source.tool), source.projectName, source.sessionShortId]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    nonisolated private static func toolName(for tool: ToolKind) -> String {
+        switch tool {
+        case .claudeCode: "Claude Code"
+        case .codex: "Codex"
         }
-        .padding(BubbleTheme.padding)
+    }
+
+    nonisolated private static func bodyText(for content: BubbleContent) -> String {
+        switch content {
+        case let .status(status): status.text
+        case let .completion(completion): completion.markdownSummary
+        case .approval, .question: ""
+        }
+    }
+
+    nonisolated private static func autoDismissSeconds(for content: BubbleContent) -> Double {
+        switch content {
+        case .status: 7
+        case .completion: 9
+        case .approval, .question: 20
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .padding(.horizontal, BubbleTheme.padding)
+                .padding(.top, BubbleTheme.padding)
+                .padding(.bottom, 10)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(BubbleTheme.separator).frame(height: 1)
+                }
+            bodyContent
+                .padding(BubbleTheme.padding)
+        }
         .frame(minWidth: BubbleTheme.minWidth, maxWidth: BubbleTheme.maxWidth, alignment: .leading)
-        .background(bubbleBackground)
+        .background(BubbleTheme.background)
+        .clipShape(RoundedRectangle(cornerRadius: BubbleTheme.cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: BubbleTheme.cornerRadius)
+                .stroke(statusAccent.opacity(0.45), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.22), radius: 14, y: 8)
         .contentShape(
             BubbleShape(
                 cornerRadius: BubbleTheme.cornerRadius,
@@ -55,36 +118,114 @@ struct SpeechBubble: View {
         .accessibilityLabel(accessibilityLabel)
     }
 
-    // MARK: - Header
+    // MARK: - Header (source identity + status chip)
 
     private var header: some View {
-        HStack(spacing: 5) {
-            Image(systemName: toolIcon)
-            Text(sourceLabel)
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    toolMark
+                    Text(projectName)
+                        .font(BubbleTheme.bodyFont.weight(.semibold))
+                        .foregroundStyle(BubbleTheme.bodyText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Text(metaLine)
+                    .font(.caption)
+                    .foregroundStyle(BubbleTheme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            statusChip
         }
-        .font(BubbleTheme.headerFont)
-        .foregroundStyle(BubbleTheme.headerText)
-        .lineLimit(1)
     }
 
-    private var toolIcon: String {
+    private var toolMark: some View {
+        Text(toolMarkLetter)
+            .font(.system(size: 11, weight: .heavy))
+            .frame(width: 18, height: 18)
+            .background(toolAccent.opacity(source.tool == .claudeCode ? 0.14 : 0.16), in: RoundedRectangle(cornerRadius: 5))
+            .foregroundStyle(toolAccent)
+            .accessibilityHidden(true)
+    }
+
+    private var statusChip: some View {
+        HStack(spacing: 6) {
+            Circle().fill(statusAccent).frame(width: 7, height: 7)
+            Text(statusTitle)
+        }
+        .font(BubbleTheme.headerFont)
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(statusAccent.opacity(0.12), in: Capsule())
+        .overlay(Capsule().stroke(statusAccent.opacity(0.38), lineWidth: 1))
+        .foregroundStyle(statusChipText)
+        .fixedSize()
+        .accessibilityHidden(true)
+    }
+
+    private var toolMarkLetter: String {
         switch source.tool {
-        case .claudeCode: "sparkles"
-        case .codex: "terminal"
+        case .claudeCode: "A"
+        case .codex: "C"
+        }
+    }
+
+    private var toolAccent: Color {
+        switch source.tool {
+        case .claudeCode: BubbleTheme.accentOrange
+        case .codex: BubbleTheme.accentBlue
+        }
+    }
+
+    /// Status chip + bubble border accent: green while running / done, red on error.
+    private var statusAccent: Color {
+        switch content {
+        case let .completion(completion): completion.isError ? BubbleTheme.accentRed : BubbleTheme.accentGreen
+        default: BubbleTheme.accentGreen
+        }
+    }
+
+    private var statusChipText: Color {
+        switch content {
+        case let .completion(completion) where completion.isError:
+            Color(red: 1, green: 0xd2 / 255, blue: 0xd2 / 255)
+        default:
+            Color(red: 0xae / 255, green: 1, blue: 0xcd / 255)
+        }
+    }
+
+    private var statusTitle: String {
+        switch content {
+        case .status: "运行中"
+        case let .completion(completion): completion.isError ? "错误" : "完成"
+        case .approval, .question: "运行中"
         }
     }
 
     private var toolName: String {
-        switch source.tool {
-        case .claudeCode: "Claude Code"
-        case .codex: "Codex"
+        Self.toolName(for: source.tool)
+    }
+
+    private var projectName: String {
+        source.projectName.flatMap { $0.isEmpty ? nil : $0 } ?? toolName
+    }
+
+    private var metaLine: String {
+        var parts = [toolName]
+        if let cwd = source.cwd, !cwd.isEmpty {
+            parts.append((cwd as NSString).abbreviatingWithTildeInPath)
         }
+        if let shortId = source.sessionShortId, !shortId.isEmpty {
+            parts.append(shortId.hasPrefix("#") ? shortId : "#\(shortId)")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var sourceLabel: String {
-        [toolName, source.projectName, source.sessionShortId]
-            .compactMap { $0 }
-            .joined(separator: " · ")
+        Self.sourceLabel(for: source)
     }
 
     // MARK: - Body
@@ -93,27 +234,20 @@ struct SpeechBubble: View {
     private var bodyContent: some View {
         switch content {
         case let .status(status):
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "message.fill")
-                    .foregroundStyle(Color(nsColor: .systemBlue))
-                Text(status.text)
-                    .font(BubbleTheme.bodyFont)
-                    .foregroundStyle(BubbleTheme.bodyText)
-                    .lineLimit(1)
-            }
+            Text(status.text)
+                .font(BubbleTheme.bodyFont)
+                .foregroundStyle(BubbleTheme.bodyText)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case let .completion(completion):
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: completion.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(completion.isError ? BubbleTheme.errorAccent : Color(nsColor: .systemGreen))
-                ThinBubbleScrollView {
-                    BubbleMarkdownView(
-                        markdown: completion.markdownSummary,
-                        isError: completion.isError
-                    )
-                    .padding(.trailing, 8)
-                }
-                .frame(maxHeight: BubbleTheme.contentMaxHeight)
+            ThinBubbleScrollView {
+                BubbleMarkdownView(
+                    markdown: completion.markdownSummary,
+                    isError: completion.isError
+                )
+                .padding(.trailing, 8)
             }
+            .frame(maxHeight: BubbleTheme.contentMaxHeight)
         case .approval, .question:
             // Interactive cards land in M4 / M5.
             EmptyView()
@@ -127,28 +261,6 @@ struct SpeechBubble: View {
         case let .completion(completion): "\(sourceLabel): \(completion.markdownSummary)"
         case .approval, .question: sourceLabel
         }
-    }
-
-    // MARK: - Background + tail
-
-    private var bubbleBackground: some View {
-        BubbleShape(
-            cornerRadius: BubbleTheme.cornerRadius,
-            tailEdge: tailEdge,
-            tailOffsetX: tailOffsetX,
-            tailSize: BubbleTheme.tailSize
-        )
-        .fill(BubbleTheme.background)
-        .overlay(
-            BubbleShape(
-                cornerRadius: BubbleTheme.cornerRadius,
-                tailEdge: tailEdge,
-                tailOffsetX: tailOffsetX,
-                tailSize: BubbleTheme.tailSize
-            )
-            .stroke(BubbleTheme.border, lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.22), radius: 14, y: 8)
     }
 
     // MARK: - Auto-dismiss
@@ -170,11 +282,7 @@ struct SpeechBubble: View {
     }
 
     private var autoDismissSeconds: Double {
-        switch content {
-        case .status: 7
-        case .completion: 9
-        case .approval, .question: 20
-        }
+        Self.autoDismissSeconds(for: content)
     }
 }
 
@@ -373,7 +481,7 @@ private struct BubbleMarkdownView: View {
     }
 }
 
-private struct ThinBubbleScrollView<Content: View>: View {
+struct ThinBubbleScrollView<Content: View>: View {
     private let content: () -> Content
     private let coordinateSpaceName = "thinBubbleScroll"
 

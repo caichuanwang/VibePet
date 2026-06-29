@@ -644,6 +644,38 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(response, .question(answer))
     }
 
+    func testQuestionPresentationCarriesMutedConversationContextFromSessionState() async throws {
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface)
+        var state = SessionState()
+        let envelope = questionEnvelope(sessionID: "session-with-context")
+        state.apply(.sessionStarted(
+            sessionID: envelope.source.sessionID,
+            timestamp: Date(timeIntervalSince1970: 1),
+            title: "VibePet",
+            tool: .claudeCode,
+            summary: "User prompt: Add auth",
+            jumpTarget: nil
+        ))
+        state.apply(.questionAsked(
+            sessionID: envelope.source.sessionID,
+            timestamp: Date(timeIntervalSince1970: 2),
+            summary: "Need to choose a database"
+        ))
+
+        controller.sync(with: state)
+        let task = Task { await controller.requestDecision(for: envelope) }
+        try await waitUntil { surface.presentedQuestions.count == 1 }
+
+        XCTAssertEqual(
+            surface.presentedQuestions[0].conversationContext,
+            QuestionConversationContext(latestUserPrompt: "Add auth", agentSummary: "Need to choose a database")
+        )
+
+        surface.fireDecision(.question(QuestionAnswer(answers: ["Database": "SQLite"])))
+        _ = await task.value
+    }
+
     func testUnansweredQuestionWaitsUntilUserSubmits() async throws {
         let surface = FakePetSurface()
         let controller = PetController(surface: surface)
@@ -667,12 +699,16 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(controller.state, .idle)
     }
 
-    private func questionEnvelope(jumpTarget: JumpTarget? = nil) -> BridgeEnvelope {
+    private func questionEnvelope(
+        jumpTarget: JumpTarget? = nil,
+        sessionID: String? = nil
+    ) -> BridgeEnvelope {
         BridgeEnvelope(
             requestId: UUID(),
             source: SourceInfo(
                 tool: .claudeCode,
                 projectName: "VibePet",
+                sessionID: sessionID,
                 sessionShortId: "a1b2c3",
                 cwd: "/tmp/VibePet",
                 jumpTarget: jumpTarget
@@ -1014,6 +1050,7 @@ private final class FakePetSurface: PetSurface {
     struct PresentedQuestion {
         let content: QuestionContent
         let source: SourceInfo
+        let conversationContext: QuestionConversationContext?
         let pendingCount: Int
         let onJump: ((JumpTarget) -> Void)?
     }
@@ -1089,6 +1126,7 @@ private final class FakePetSurface: PetSurface {
     func presentQuestion(
         content: QuestionContent,
         source: SourceInfo,
+        conversationContext: QuestionConversationContext?,
         placement: BubbleAnchor.Placement,
         pendingCount: Int,
         onJump: @escaping (JumpTarget) -> Void,
@@ -1098,6 +1136,7 @@ private final class FakePetSurface: PetSurface {
             PresentedQuestion(
                 content: content,
                 source: source,
+                conversationContext: conversationContext,
                 pendingCount: pendingCount,
                 onJump: onJump
             )

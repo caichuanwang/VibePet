@@ -1,8 +1,4 @@
-## Purpose
-
-Define how `QuestionCard` renders `.question` content and collects a `QuestionAnswer` from the user within the `decide` state.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Question card renders each question item
 
@@ -47,20 +43,6 @@ Define how `QuestionCard` renders `.question` content and collects a `QuestionAn
 - **WHEN** the user answers one page of a multi-question card, navigates away, and returns to that page
 - **THEN** the previously selected options and freeform text for that question are still shown
 
-### Requirement: Freeform option expands a text field
-
-`QuestionCard` SHALL, when a selected `QuestionOption` has `allowsFreeform == true` (the synthetic "其他" choice the adapter appends to every question), present an editable text field for that option. The typed text SHALL contribute to the answer value in place of the option's label.
-
-#### Scenario: Selecting a freeform option reveals a text field
-
-- **WHEN** the user selects the "其他" option whose `allowsFreeform` is `true`
-- **THEN** `QuestionCard` shows a text field bound to that option, and the typed text becomes the answer value under the item's `header`
-
-#### Scenario: Submit waits for freeform text
-
-- **WHEN** a freeform option is selected but its text field is empty
-- **THEN** submit is disabled until the user types text (or deselects the option)
-
 ### Requirement: Submit collects a QuestionAnswer keyed by header
 
 `QuestionCard` SHALL provide a submit affordance (`⌘↩`) that resolves the card with `.question(QuestionAnswer)` whose `answers` map each item's `header` to one string value — single-select as the chosen label, multi-select as the chosen labels joined with `", "`, and a freeform ("其他") choice contributing the typed text in place of its label (matching how Claude Code's CLI inlines free text into the answer value). Submit SHALL be visible only for a single-question card or on the final page of a multi-question card. Submit SHALL be disabled until every question in the card is answered: each question MUST have at least one selected option, and any selected freeform ("其他") option MUST carry non-empty text, so a multi-topic `AskUserQuestion` can never be submitted with some topics left unanswered. The terminal jump gesture SHALL NOT intercept submit controls or keyboard submission.
@@ -89,6 +71,8 @@ Define how `QuestionCard` renders `.question` content and collects a `QuestionAn
 
 - **WHEN** a question card has a source jump target and the user activates submit with the button or `⌘↩`
 - **THEN** the card resolves with the question answer and does not invoke jump-back instead of submission
+
+## ADDED Requirements
 
 ### Requirement: Multi-question navigation controls
 

@@ -36,6 +36,21 @@ final class BubbleJumpActionTests: XCTestCase {
         XCTAssertEqual(jumped, [target])
     }
 
+    func testApprovalBackToTerminalJumpsWithoutResolvingNormalApproval() {
+        let target = JumpTarget(terminalApp: "iTerm", terminalSessionID: "session-1")
+        var jumped: [JumpTarget] = []
+
+        let response = ApprovalCard.activateBackToTerminal(
+            for: approval(requiresTerminal: false),
+            source: source(jumpTarget: target)
+        ) {
+            jumped.append($0)
+        }
+
+        XCTAssertEqual(jumped, [target])
+        XCTAssertNil(response)
+    }
+
     func testQuestionCardJumpBackInvokesActionOnceWhenTargetExists() {
         let target = JumpTarget(terminalApp: "Ghostty", terminalSessionID: "ghostty-1")
         var jumped: [JumpTarget] = []
@@ -45,6 +60,36 @@ final class BubbleJumpActionTests: XCTestCase {
         }
 
         XCTAssertEqual(jumped, [target])
+    }
+
+    func testQuestionBackToTerminalJumpsWithoutResolving() {
+        let target = JumpTarget(terminalApp: "Ghostty", terminalSessionID: "ghostty-1")
+        var jumped: [JumpTarget] = []
+
+        let response = QuestionCard.activateBackToTerminal(from: source(jumpTarget: target)) {
+            jumped.append($0)
+        }
+
+        XCTAssertEqual(jumped, [target])
+        XCTAssertNil(response)
+    }
+
+    func testQuestionSubmitProjectionDoesNotInvokeJump() {
+        let target = JumpTarget(terminalApp: "Ghostty", terminalSessionID: "ghostty-1")
+        var jumped: [JumpTarget] = []
+        var responses: [BridgeResponse] = []
+
+        QuestionCard.activateSubmit(
+            answer: QuestionAnswer(answers: ["Database": "SQLite"]),
+            onAnswer: { responses.append($0) }
+        )
+        QuestionCard.jumpBack(from: source(jumpTarget: nil)) {
+            jumped.append($0)
+        }
+        _ = target
+
+        XCTAssertTrue(jumped.isEmpty)
+        XCTAssertEqual(responses, [.question(QuestionAnswer(answers: ["Database": "SQLite"]))])
     }
 
     func testDashboardJumpBackNoopsWithoutTarget() {
@@ -75,6 +120,16 @@ final class BubbleJumpActionTests: XCTestCase {
             sessionShortId: "a1b2c3",
             cwd: "/tmp/VibePet",
             jumpTarget: jumpTarget
+        )
+    }
+
+    private func approval(requiresTerminal: Bool) -> ApprovalContent {
+        ApprovalContent(
+            title: "运行命令",
+            risk: .medium,
+            preview: .command(text: "swift test"),
+            alwaysAllow: nil,
+            requiresTerminalApproval: requiresTerminal
         )
     }
 }

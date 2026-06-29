@@ -36,6 +36,7 @@ final class PetController {
     private var frontDashboardCard: SessionDashboardCard?
     private var activeNotificationSessionID: String?
     private var activeNotificationSource: SourceInfo?
+    private var sessionStateSnapshot = SessionState()
 
     /// Notifications that arrived while a decision was active (decide > notify):
     /// they accumulate as a badge instead of clobbering the approval card.
@@ -129,6 +130,7 @@ final class PetController {
     }
 
     func sync(with sessionState: SessionState) {
+        sessionStateSnapshot = sessionState
         switch sessionState.derivedPetActivity {
         case .deciding:
             machine.beginDecision()
@@ -249,6 +251,7 @@ final class PetController {
                 surface.dismissApproval()
             }
         case let .question(question):
+            let conversationContext = questionConversationContext(for: front.envelope.source)
             frontDecisionRenderer = { [weak self, terminalJump] in
                 if let cached = self?.frontDashboardCard {
                     return cached
@@ -259,6 +262,7 @@ final class PetController {
                     view: AnyView(QuestionCard(
                         content: question,
                         source: front.envelope.source,
+                        conversationContext: conversationContext,
                         tailEdge: .bottom,
                         tailOffsetX: 40,
                         presentation: presentation,
@@ -274,6 +278,7 @@ final class PetController {
                 surface.presentQuestion(
                     content: question,
                     source: front.envelope.source,
+                    conversationContext: conversationContext,
                     placement: placement,
                     pendingCount: decisions.pendingCount,
                     onJump: terminalJump,
@@ -315,6 +320,10 @@ final class PetController {
         machine.bubbleDismissed()
         surface.dismissApproval()
         render()
+    }
+
+    private func questionConversationContext(for source: SourceInfo) -> QuestionConversationContext? {
+        QuestionConversationContext(session: sessionStateSnapshot.sessionsByID[source.sessionID])
     }
 
     private func greetingFinished() {
@@ -516,6 +525,7 @@ protocol PetSurface: AnyObject {
     func presentQuestion(
         content: QuestionContent,
         source: SourceInfo,
+        conversationContext: QuestionConversationContext?,
         placement: BubbleAnchor.Placement,
         pendingCount: Int,
         onJump: @escaping (JumpTarget) -> Void,

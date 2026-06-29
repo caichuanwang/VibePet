@@ -1,8 +1,4 @@
-## Purpose
-
-Define how `SpeechBubble` renders status and completion content, anchors relative to the pet, and adapts its width and source header.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Status bubble rendering
 
@@ -22,39 +18,6 @@ Define how `SpeechBubble` renders status and completion content, anchors relativ
 
 - **WHEN** a `.status` bubble with a source jump target is double-clicked on its body
 - **THEN** the injected terminal jump action is invoked once with that jump target
-
-### Requirement: Completion bubble rendering
-
-`SpeechBubble` SHALL render `.completion` content as an icon plus `markdownSummary` rendered as Markdown, showing roughly 6 lines before scrolling internally, auto-dismissing after 8–10s with hover-to-pause. When `isError` is `true` it SHALL use a warning icon and alert coloring. When the bubble's source carries a jump target, double-clicking the non-control bubble body SHALL invoke the injected terminal jump action once and SHALL NOT alter scrolling, auto-dismiss, hover-pause, or error styling behavior.
-
-#### Scenario: Completion renders markdown and auto-dismisses
-
-- **WHEN** a `.completion` envelope with a multi-line `markdownSummary` is presented
-- **THEN** the bubble renders the Markdown, scrolls internally past ~6 lines, and auto-dismisses after 8–10s
-
-#### Scenario: Error completion uses alert styling
-
-- **WHEN** a `.completion` envelope has `isError == true`
-- **THEN** the bubble uses a warning icon and alert coloring instead of the success styling
-
-#### Scenario: Double-click completion jumps back
-
-- **WHEN** a `.completion` bubble with a source jump target is double-clicked on its body
-- **THEN** the injected terminal jump action is invoked once with that jump target
-
-### Requirement: Quadrant-aware anchoring with tail tracking and boundary avoidance
-
-`SpeechBubble` SHALL anchor relative to the pet using quadrant-aware opening direction based on the pet center within the main screen `visibleFrame` (lower half opens up, upper half opens down; right half opens left, left half opens right). A tail SHALL track the pet center, and the bubble SHALL be clamped within `visibleFrame` (12pt from edges), flipping side only when there is no room.
-
-#### Scenario: Opening direction follows quadrant
-
-- **WHEN** the pet center is in the lower-right quadrant of `visibleFrame`
-- **THEN** the bubble opens toward the upper-left and its tail points at the pet center
-
-#### Scenario: Bubble stays within the visible frame
-
-- **WHEN** anchoring would place the bubble past a screen edge
-- **THEN** the bubble is clamped to within 12pt of the edge while the tail still points at the pet
 
 ### Requirement: Adaptive width and source header
 

@@ -1,5 +1,6 @@
 import XCTest
 @testable import VibePetApp
+import VibePetCore
 
 final class SpeechBubbleMarkdownTests: XCTestCase {
     func testMarkdownBlocksPreserveParagraphsListsAndCodeFences() {
@@ -45,5 +46,27 @@ final class SpeechBubbleMarkdownTests: XCTestCase {
 
     func testBubbleScrollThumbStaysThinLikeDashboardPanel() {
         XCTAssertLessThanOrEqual(BubbleTheme.scrollThumbWidth, 2)
+    }
+
+    func testStatusBubbleProjectionIsCompactWithNoFooter() {
+        let projection = SpeechBubble.layoutProjection(
+            for: .status(StatusContent(text: "Running tests")),
+            source: SourceInfo(
+                tool: .codex,
+                projectName: "VibePet",
+                sessionShortId: "abc123",
+                cwd: "/tmp/VibePet",
+                jumpTarget: JumpTarget(terminalApp: "Terminal")
+            )
+        )
+
+        XCTAssertEqual(projection.sourceLabel, "Codex · VibePet · abc123")
+        XCTAssertEqual(projection.bodyText, "Running tests")
+        XCTAssertTrue(projection.hasSourceHeader)
+        XCTAssertFalse(projection.hasFooter)
+        XCTAssertTrue(projection.supportsBodyJumpBack)
+        XCTAssertTrue(projection.pausesAutoDismissOnHover)
+        XCTAssertGreaterThanOrEqual(projection.autoDismissSeconds, 6)
+        XCTAssertLessThanOrEqual(projection.autoDismissSeconds, 8)
     }
 }

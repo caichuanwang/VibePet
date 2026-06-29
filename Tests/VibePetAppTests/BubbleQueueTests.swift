@@ -61,4 +61,12 @@ final class BubbleQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingCount, 0)
         XCTAssertNil(queue.front)
     }
+
+    func testStackPeekCountClampsToTwoPendingCards() {
+        XCTAssertEqual(ApprovalPresentation.peekCount(for: -1), 0)
+        XCTAssertEqual(ApprovalPresentation.peekCount(for: 0), 0)
+        XCTAssertEqual(ApprovalPresentation.peekCount(for: 1), 1)
+        XCTAssertEqual(ApprovalPresentation.peekCount(for: 2), 2)
+        XCTAssertEqual(ApprovalPresentation.peekCount(for: 3), 2)
+    }
 }

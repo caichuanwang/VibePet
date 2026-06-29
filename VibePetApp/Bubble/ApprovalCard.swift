@@ -22,9 +22,54 @@ struct ApprovalCard: View {
         case terminal
     }
 
+    enum DecisionAction: Equatable {
+        case deny
+        case allowOnce
+        case allowAlways
+    }
+
+    struct FooterProjection: Equatable {
+        let mode: FooterMode
+        let showsBackToTerminal: Bool
+        let showsDeny: Bool
+        let showsAllowOnce: Bool
+        let showsAlwaysAllow: Bool
+        let pendingCount: Int
+    }
+
+    struct LayoutProjection: Equatable {
+        let footerMode: FooterMode
+        let includesConversationContext: Bool
+        let primaryPreview: ActionPreview
+    }
+
     /// Pure decision used by both the view and tests.
     static func footerMode(for content: ApprovalContent) -> FooterMode {
         content.requiresTerminalApproval ? .terminal : .decision
+    }
+
+    static func footerProjection(
+        for content: ApprovalContent,
+        source: SourceInfo,
+        pendingCount: Int
+    ) -> FooterProjection {
+        let mode = footerMode(for: content)
+        return FooterProjection(
+            mode: mode,
+            showsBackToTerminal: source.jumpTarget != nil || mode == .terminal,
+            showsDeny: mode == .decision,
+            showsAllowOnce: mode == .decision,
+            showsAlwaysAllow: mode == .decision && content.alwaysAllow != nil,
+            pendingCount: pendingCount
+        )
+    }
+
+    static func layoutProjection(for content: ApprovalContent) -> LayoutProjection {
+        LayoutProjection(
+            footerMode: footerMode(for: content),
+            includesConversationContext: false,
+            primaryPreview: content.preview
+        )
     }
 
     /// Activating "回终端处理" defers so the tool falls back to its native flow.
@@ -34,6 +79,36 @@ struct ApprovalCard: View {
         if let jumpTarget = source.jumpTarget {
             onJump(jumpTarget)
         }
+    }
+
+    static func activateBackToTerminal(
+        for content: ApprovalContent,
+        source: SourceInfo,
+        onJump: (JumpTarget) -> Void
+    ) -> BridgeResponse? {
+        jumpBack(from: source, onJump: onJump)
+        return footerMode(for: content) == .terminal ? terminalResponse : nil
+    }
+
+    static func response(for action: DecisionAction, content: ApprovalContent) -> BridgeResponse? {
+        switch action {
+        case .deny:
+            return .approval(.deny(reason: nil))
+        case .allowOnce:
+            return .approval(.allowOnce)
+        case .allowAlways:
+            guard let always = content.alwaysAllow else { return nil }
+            return .approval(.allowAlways(scopeHint: always.scopeHint))
+        }
+    }
+
+    static func performDecision(
+        _ action: DecisionAction,
+        content: ApprovalContent,
+        onDecision: (BridgeResponse) -> Void
+    ) {
+        guard let response = response(for: action, content: content) else { return }
+        onDecision(response)
     }
 
     let content: ApprovalContent
@@ -65,15 +140,19 @@ struct ApprovalCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().overlay(BubbleTheme.separator)
             previewBody
             footer
         }
-        .padding(BubbleTheme.padding)
         .frame(minWidth: BubbleTheme.minWidth, maxWidth: BubbleTheme.maxWidth, alignment: .leading)
-        .background(bubbleBackground)
+        .background(BubbleTheme.background)
+        .clipShape(RoundedRectangle(cornerRadius: BubbleTheme.cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: BubbleTheme.cornerRadius)
+                .stroke(BubbleTheme.riskAccent(content.risk).opacity(0.55), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.22), radius: 14, y: 8)
         .contentShape(
             BubbleShape(
                 cornerRadius: BubbleTheme.cornerRadius,
@@ -93,31 +172,74 @@ struct ApprovalCard: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Image(systemName: toolIcon)
-            Text(sourceLabel)
-                .lineLimit(1)
-            Spacer(minLength: 6)
-            riskBadge
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    toolMark
+                    Text(source.projectName ?? toolName)
+                        .font(BubbleTheme.bodyFont.weight(.semibold))
+                        .foregroundStyle(BubbleTheme.bodyText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Text(metaLine)
+                    .font(.caption)
+                    .foregroundStyle(BubbleTheme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            statusChip
         }
-        .font(BubbleTheme.headerFont)
-        .foregroundStyle(BubbleTheme.headerText)
+        .padding(.horizontal, BubbleTheme.padding)
+        .padding(.top, BubbleTheme.padding)
+        .padding(.bottom, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(BubbleTheme.separator).frame(height: 1)
+        }
     }
 
-    private var riskBadge: some View {
-        Text(BubbleTheme.riskLabel(content.risk))
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(BubbleTheme.riskAccent(content.risk).opacity(0.16), in: Capsule())
-            .foregroundStyle(BubbleTheme.riskAccent(content.risk))
+    private var toolMark: some View {
+        Text(toolMarkLetter)
+            .font(.system(size: 11, weight: .heavy))
+            .frame(width: 18, height: 18)
+            .background(toolAccent.opacity(source.tool == .claudeCode ? 0.14 : 0.16), in: RoundedRectangle(cornerRadius: 5))
+            .foregroundStyle(toolAccent)
+            .accessibilityHidden(true)
     }
 
-    private var toolIcon: String {
+    private var toolMarkLetter: String {
         switch source.tool {
-        case .claudeCode: "sparkles"
-        case .codex: "terminal"
+        case .claudeCode: "A"
+        case .codex: "C"
         }
+    }
+
+    private var statusChip: some View {
+        HStack(spacing: 6) {
+            Circle().fill(BubbleTheme.accentOrange).frame(width: 7, height: 7)
+            Text("待审批")
+        }
+        .font(.caption)
+        .padding(.horizontal, 8)
+        .frame(height: 24)
+        .foregroundStyle(BubbleTheme.riskTextColor(.medium))
+        .background(BubbleTheme.accentOrange.opacity(0.12), in: Capsule())
+        .overlay(Capsule().stroke(BubbleTheme.accentOrange.opacity(0.38), lineWidth: 1))
+        .fixedSize()
+    }
+
+    private var toolAccent: Color {
+        switch source.tool {
+        case .claudeCode: BubbleTheme.accentOrange
+        case .codex: BubbleTheme.accentBlue
+        }
+    }
+
+    private var metaLine: String {
+        [toolName, source.sessionShortId.map { "#\($0)" }, source.jumpTarget?.terminalApp]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 
     private var toolName: String {
@@ -135,14 +257,23 @@ struct ApprovalCard: View {
 
     // MARK: - Body (ActionPreview)
 
-    @ViewBuilder
     private var previewBody: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(content.title)
-                .font(BubbleTheme.bodyFont.weight(.semibold))
-                .foregroundStyle(BubbleTheme.bodyText)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(content.title)
+                    .font(BubbleTheme.bodyFont.weight(.semibold))
+                    .foregroundStyle(BubbleTheme.bodyText)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Text(BubbleTheme.riskLabel(content.risk))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BubbleTheme.riskTextColor(content.risk))
+                    .fixedSize()
+            }
             previewDetail
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(BubbleTheme.padding)
     }
 
     @ViewBuilder
@@ -151,25 +282,57 @@ struct ApprovalCard: View {
         case let .command(text):
             Text(truncatedCommand(text))
                 .font(BubbleTheme.monoFont)
-                .foregroundStyle(content.risk == .high ? BubbleTheme.errorAccent : BubbleTheme.bodyText)
+                .foregroundStyle(BubbleTheme.bodyText)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(BubbleTheme.fieldBackground, in: RoundedRectangle(cornerRadius: BubbleTheme.innerCornerRadius))
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: BubbleTheme.innerCornerRadius)
+                        .fill(BubbleTheme.riskAccent(content.risk).opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: BubbleTheme.innerCornerRadius)
+                        .stroke(BubbleTheme.riskAccent(content.risk).opacity(0.34), lineWidth: 1)
+                )
         case let .fileChange(path, added, removed):
-            VStack(alignment: .leading, spacing: 2) {
-                Text(path).font(BubbleTheme.monoFont).lineLimit(1).truncationMode(.middle)
-                Text("+\(added) −\(removed)")
-                    .font(.caption)
-                    .foregroundStyle(BubbleTheme.mutedText)
+            codeBox {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(path).font(BubbleTheme.monoFont).lineLimit(1).truncationMode(.middle)
+                    Text("+\(added) −\(removed)")
+                        .font(.caption)
+                        .foregroundStyle(BubbleTheme.mutedText)
+                }
             }
         case let .fileRead(path):
-            Text(path).font(BubbleTheme.monoFont).lineLimit(2).truncationMode(.middle)
+            codeBox {
+                Text(path).font(BubbleTheme.monoFont).lineLimit(2).truncationMode(.middle)
+            }
         case let .network(target):
-            Text(target).font(BubbleTheme.monoFont).lineLimit(2).truncationMode(.middle)
+            codeBox {
+                Text(target).font(BubbleTheme.monoFont).lineLimit(2).truncationMode(.middle)
+            }
         case let .generic(summary):
-            Text(summary).font(BubbleTheme.bodyFont).foregroundStyle(BubbleTheme.bodyText)
+            Text(summary)
+                .font(BubbleTheme.bodyFont)
+                .foregroundStyle(BubbleTheme.bodyText)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    @ViewBuilder
+    private func codeBox<Content: View>(@ViewBuilder _ inner: () -> Content) -> some View {
+        inner()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(BubbleTheme.bodyText)
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: BubbleTheme.innerCornerRadius)
+                    .fill(BubbleTheme.fieldBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: BubbleTheme.innerCornerRadius)
+                    .stroke(BubbleTheme.codeboxBorder, lineWidth: 1)
+            )
     }
 
     /// Truncates a command body to 3 lines, eliding the remainder (§5.3.3).
@@ -185,13 +348,18 @@ struct ApprovalCard: View {
     private var footer: some View {
         switch Self.footerMode(for: content) {
         case .decision:
-            HStack(spacing: 8) {
+            BubbleFooter {
+                if source.jumpTarget != nil {
+                    Button("回终端") { handleBackToTerminal() }
+                        .buttonStyle(BubbleActionButtonStyle(variant: .neutral))
+                        .accessibilityLabel("回终端")
+                }
+            } trailing: {
                 pendingLabel
-                Spacer(minLength: 6)
                 buttons
             }
         case .terminal:
-            terminalFooter
+            terminalFooter.bubbleFooterBar()
         }
     }
 
@@ -199,28 +367,33 @@ struct ApprovalCard: View {
     /// "回终端处理" button. MVP only copies the action summary and defers (real
     /// jump-back to the terminal is v1.1).
     private var terminalFooter: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("此请求需在终端继续处理")
                 .font(.caption)
                 .foregroundStyle(BubbleTheme.mutedText)
-            HStack(spacing: 8) {
+            HStack(spacing: BubbleTheme.footerButtonSpacing) {
                 pendingLabel
-                Spacer(minLength: 6)
+                Spacer(minLength: 8)
                 Button("回终端处理") { handleInTerminal() }
+                    .buttonStyle(BubbleActionButtonStyle(variant: .primary))
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                    .accessibilityLabel("回终端处理")
             }
         }
     }
 
+    private func handleBackToTerminal() {
+        _ = Self.activateBackToTerminal(for: content, source: source, onJump: onJump)
+    }
+
     private func handleInTerminal() {
-        Self.jumpBack(from: source, onJump: onJump)
+        let response = Self.activateBackToTerminal(for: content, source: source, onJump: onJump)
         // Copy the action summary so the user can locate/paste it in the terminal,
         // then defer to the tool's native flow.
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(previewText, forType: .string)
-        decide(Self.terminalResponse)
+        decide(response ?? Self.terminalResponse)
     }
 
     private var previewText: String {
@@ -243,50 +416,44 @@ struct ApprovalCard: View {
     }
 
     private var buttons: some View {
-        HStack(spacing: 6) {
-            Button("拒绝") { decide(.approval(.deny(reason: nil))) }
+        HStack(spacing: BubbleTheme.footerButtonSpacing) {
+            Button(content.denyLabel) { decide(.deny) }
+                .buttonStyle(BubbleActionButtonStyle(variant: .danger))
                 .keyboardShortcut(.cancelAction)
                 .focused($focus, equals: .deny)
-                .buttonStyle(.bordered)
-            Button(content.allowLabel) { decide(.approval(.allowOnce)) }
+                .overlay { focusRing(.deny) }
+                .accessibilityLabel(content.denyLabel)
+            Button(content.allowLabel) { decide(.allowOnce) }
+                .buttonStyle(BubbleActionButtonStyle(variant: .primary))
                 .keyboardShortcut(.defaultAction)
                 .focused($focus, equals: .allow)
-                .buttonStyle(.borderedProminent)
-                .tint(content.risk == .high ? .gray : .accentColor)
+                .overlay { focusRing(.allow) }
+                .accessibilityLabel(content.allowLabel)
             if let always = content.alwaysAllow {
                 Button(always.label) {
-                    decide(.approval(.allowAlways(scopeHint: always.scopeHint)))
+                    decide(.allowAlways)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(BubbleActionButtonStyle(variant: .trust))
+                .accessibilityLabel(always.label)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func focusRing(_ field: Field) -> some View {
+        if focus == field {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(BubbleTheme.accentBlue, lineWidth: 2)
         }
     }
 
     // MARK: - Decision
 
-    private func decide(_ response: BridgeResponse) {
-        onDecision(response)
+    private func decide(_ action: DecisionAction) {
+        Self.performDecision(action, content: content, onDecision: onDecision)
     }
 
-    // MARK: - Background + tail
-
-    private var bubbleBackground: some View {
-        BubbleShape(
-            cornerRadius: BubbleTheme.cornerRadius,
-            tailEdge: tailEdge,
-            tailOffsetX: tailOffsetX,
-            tailSize: BubbleTheme.tailSize
-        )
-        .fill(BubbleTheme.background)
-        .shadow(color: Color.black.opacity(0.22), radius: 14, y: 8)
-        .overlay(
-            BubbleShape(
-                cornerRadius: BubbleTheme.cornerRadius,
-                tailEdge: tailEdge,
-                tailOffsetX: tailOffsetX,
-                tailSize: BubbleTheme.tailSize
-            )
-            .stroke(BubbleTheme.riskAccent(content.risk).opacity(0.5), lineWidth: 1)
-        )
+    private func decide(_ response: BridgeResponse) {
+        onDecision(response)
     }
 }
