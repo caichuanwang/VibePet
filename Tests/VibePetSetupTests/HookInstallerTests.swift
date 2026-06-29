@@ -8,11 +8,11 @@ import XCTest
 final class HookInstallerTests: XCTestCase {
     private let claudeManagedHookKeys = [
         "PreToolUse",
+        "PermissionRequest",
         "Stop",
         "Notification",
         "SessionStart",
         "UserPromptSubmit",
-        "PostToolUse",
         "SubagentStart",
         "SubagentStop",
         "SessionEnd",
@@ -107,7 +107,7 @@ final class HookInstallerTests: XCTestCase {
 
         let store = InstallManifestStore(applicationSupportRoot: root.url)
         var manifest = store.read()
-        manifest.tools[ToolKind.codex.rawValue]?.writtenHooks = ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit"]
+        manifest.tools[ToolKind.codex.rawValue]?.writtenHooks = ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit", "PostToolUse"]
         try store.write(manifest)
 
         XCTAssertEqual(installer.status(tool: .codex), .outdated)
@@ -118,7 +118,7 @@ final class HookInstallerTests: XCTestCase {
         let hooksData = try Data(contentsOf: codexDir.appendingPathComponent("hooks.json"))
         let rootObject = try XCTUnwrap(try JSONSerialization.jsonObject(with: hooksData) as? [String: Any])
         let hooks = try XCTUnwrap(rootObject["hooks"] as? [String: Any])
-        XCTAssertNotNil(hooks["PostToolUse"])
+        XCTAssertNil(hooks["PostToolUse"])
         XCTAssertEqual(installer.status(tool: .codex), .installedNeedsTrust)
     }
 

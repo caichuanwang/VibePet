@@ -1,16 +1,14 @@
 import XCTest
 @testable import VibePetCore
 
-/// M5-1: `PreToolUse(tool_name == AskUserQuestion)` → `.question`. The mechanism is
-/// verified supported (M5-0 spike, Claude Code ≥ 2.1.85; see
-/// `Tests/Fixtures/claude/m5-question-spike-notes.md`): a hook can satisfy
-/// AskUserQuestion via `updatedInput`, so VibePet parses the questions for in-bubble
-/// answering. Field names follow the real `AskUserQuestion` input schema.
+/// `PermissionRequest(tool_name == AskUserQuestion)` → `.question`, matching
+/// open-vibe-island's split between lifecycle `PreToolUse` and blocking
+/// permission/question requests.
 final class ClaudeCodeQuestionParseTests: XCTestCase {
     private let adapter = ClaudeCodeAdapter()
 
     func testAskUserQuestionParsesToQuestion() throws {
-        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("ask-user-question.json"), env: [:]))
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("permission-request-ask-user-question.json"), env: [:]))
         let content = try question(envelope)
 
         XCTAssertEqual(content.questions.count, 1)
@@ -29,7 +27,7 @@ final class ClaudeCodeQuestionParseTests: XCTestCase {
     }
 
     func testQuestionNeedsResponse() throws {
-        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("ask-user-question.json"), env: [:]))
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("permission-request-ask-user-question.json"), env: [:]))
         // `.question.needsResponse == true` → the CLI blocks for the answer and the
         // App enters `decide`, reusing the M4 round-trip.
         XCTAssertTrue(envelope.content.needsResponse)
@@ -37,7 +35,7 @@ final class ClaudeCodeQuestionParseTests: XCTestCase {
 
     func testMultiSelectIsPreserved() throws {
         let stdin = try json([
-            "hook_event_name": "PreToolUse",
+            "hook_event_name": "PermissionRequest",
             "session_id": "a1b2c3d4e5f6",
             "tool_name": "AskUserQuestion",
             "tool_input": [
@@ -57,7 +55,7 @@ final class ClaudeCodeQuestionParseTests: XCTestCase {
     }
 
     func testAskUserQuestionIsNotAnApproval() throws {
-        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("ask-user-question.json"), env: [:]))
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("permission-request-ask-user-question.json"), env: [:]))
         if case .approval = envelope.content {
             XCTFail("AskUserQuestion must become a question, never an approval")
         }

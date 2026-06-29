@@ -178,7 +178,6 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
         let adapter = ClaudeCodeAdapter()
         let fixtureNames = [
             "user-prompt-submit.json",
-            "post-tool-use.json",
             "subagent-start.json",
             "subagent-stop.json",
             "pre-compact.json",
@@ -195,11 +194,35 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
         }
     }
 
-    func testPreToolUseMapsDecisionAgentEvents() throws {
+    func testPostToolUseIsIgnored() throws {
         let adapter = ClaudeCodeAdapter()
 
-        let approvalEvent = try XCTUnwrap(adapter.parseEvent(stdin: fixture("pretooluse-bash.json"), env: [:])?.agentEvent)
-        let questionEvent = try XCTUnwrap(adapter.parseEvent(stdin: fixture("ask-user-question.json"), env: [:])?.agentEvent)
+        XCTAssertNil(try adapter.parseEvent(stdin: fixture("post-tool-use.json"), env: [:]))
+        XCTAssertNil(try adapter.parseAgentEvent(stdin: fixture("post-tool-use.json"), env: [:]))
+    }
+
+    func testPreToolUseMapsToActivityUpdated() throws {
+        let adapter = ClaudeCodeAdapter()
+
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("pretooluse-bash.json"), env: [:]))
+
+        XCTAssertFalse(envelope.content.needsResponse)
+        guard case let .status(content) = envelope.content else {
+            return XCTFail("Expected status, got \(envelope.content)")
+        }
+        guard case let .activityUpdated(sessionID, _, summary) = envelope.agentEvent else {
+            return XCTFail("Expected activityUpdated, got \(String(describing: envelope.agentEvent))")
+        }
+        XCTAssertEqual(content.text, "Claude Code PreToolUse: Bash")
+        XCTAssertEqual(sessionID, "a1b2c3d4e5f6")
+        XCTAssertEqual(summary, "Claude Code PreToolUse: Bash")
+    }
+
+    func testPermissionRequestMapsDecisionAgentEvents() throws {
+        let adapter = ClaudeCodeAdapter()
+
+        let approvalEvent = try XCTUnwrap(adapter.parseEvent(stdin: fixture("permission-request-bash.json"), env: [:])?.agentEvent)
+        let questionEvent = try XCTUnwrap(adapter.parseEvent(stdin: fixture("permission-request-ask-user-question.json"), env: [:])?.agentEvent)
 
         guard case let .permissionRequested(approvalSessionID, _, approvalSummary) = approvalEvent else {
             return XCTFail("Expected permissionRequested, got \(approvalEvent)")
@@ -210,7 +233,7 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
         XCTAssertEqual(approvalSessionID, "a1b2c3d4e5f6")
         XCTAssertEqual(questionSessionID, "a1b2c3d4e5f6")
         XCTAssertTrue(approvalSummary.contains("Bash"))
-        XCTAssertTrue(questionSummary.contains("AskUserQuestion"))
+        XCTAssertEqual(questionSummary, ClaudeCodeAdapter.askQuestionTitle)
     }
 
     func testStopFailureAndSessionEndCompletionFlags() throws {

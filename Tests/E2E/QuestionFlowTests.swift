@@ -16,8 +16,9 @@ final class QuestionFlowTests: XCTestCase {
             return XCTFail("Expected .responded, got \(outcome)")
         }
         let hook = try hookOutput(data)
-        XCTAssertEqual(hook["permissionDecision"] as? String, "allow")
-        let updatedInput = try XCTUnwrap(hook["updatedInput"] as? [String: Any])
+        let decision = try XCTUnwrap(hook["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "allow")
+        let updatedInput = try XCTUnwrap(decision["updatedInput"] as? [String: Any])
         let answers = try XCTUnwrap(updatedInput["answers"] as? [String: String])
         XCTAssertEqual(answers["Which database should we use?"], "SQLite")
         XCTAssertNotNil(updatedInput["questions"], "updatedInput must preserve the questions")
@@ -41,7 +42,7 @@ final class QuestionFlowTests: XCTestCase {
         )
 
         let started = Date()
-        let outcome = await runtime.run(stdin: fixture("ask-user-question.json"), env: [:])
+        let outcome = await runtime.run(stdin: fixture("permission-request-ask-user-question.json"), env: [:])
         let elapsed = Date().timeIntervalSince(started)
 
         XCTAssertEqual(outcome, .deferred)
@@ -72,7 +73,7 @@ final class QuestionFlowTests: XCTestCase {
         process.standardError = Pipe()
         try process.run()
 
-        stdinPipe.fileHandleForWriting.write(fixture("ask-user-question.json"))
+        stdinPipe.fileHandleForWriting.write(fixture("permission-request-ask-user-question.json"))
         try stdinPipe.fileHandleForWriting.close()
 
         let deadline = Date().addingTimeInterval(6)
@@ -87,8 +88,9 @@ final class QuestionFlowTests: XCTestCase {
         XCTAssertEqual(process.terminationStatus, 0, "hook CLI must exit 0")
         let stdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let hook = try hookOutput(stdout)
-        XCTAssertEqual(hook["permissionDecision"] as? String, "allow")
-        let answers = try XCTUnwrap((hook["updatedInput"] as? [String: Any])?["answers"] as? [String: String])
+        let decision = try XCTUnwrap(hook["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "allow")
+        let answers = try XCTUnwrap((decision["updatedInput"] as? [String: Any])?["answers"] as? [String: String])
         XCTAssertEqual(answers["Which database should we use?"], "SQLite")
     }
 
@@ -107,7 +109,7 @@ final class QuestionFlowTests: XCTestCase {
             adapter: ClaudeCodeAdapter(),
             client: BridgeClient(socketPath: socketPath, readTimeout: 5)
         )
-        return await runtime.run(stdin: fixture("ask-user-question.json"), env: [:])
+        return await runtime.run(stdin: fixture("permission-request-ask-user-question.json"), env: [:])
     }
 
     private func hookOutput(_ data: Data) throws -> [String: Any] {

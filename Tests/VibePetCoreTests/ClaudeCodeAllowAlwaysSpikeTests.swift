@@ -1,7 +1,7 @@
 import XCTest
 @testable import VibePetCore
 
-/// M4-3a spike: a Claude Code `PreToolUse` hook cannot grant a persistent allow
+/// A Claude Code permission hook cannot grant a persistent allow
 /// (see `Tests/Fixtures/claude/allow-always-spike-notes.md`). These tests pin the
 /// "unsupported" conclusion so a regression that silently re-enables a bogus
 /// allowAlways branch is caught.
@@ -9,7 +9,7 @@ final class ClaudeCodeAllowAlwaysSpikeTests: XCTestCase {
     private let adapter = ClaudeCodeAdapter()
 
     func testParsedApprovalHasNoAlwaysAllowOption() throws {
-        for fixture in ["pretooluse-bash.json", "pretooluse-edit.json", "pretooluse-webfetch.json"] {
+        for fixture in ["permission-request-bash.json"] {
             let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixtureData(fixture), env: [:]))
             guard case let .approval(content) = envelope.content else {
                 return XCTFail("Expected .approval for \(fixture)")
@@ -27,10 +27,11 @@ final class ClaudeCodeAllowAlwaysSpikeTests: XCTestCase {
         )
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let output = try XCTUnwrap(object["hookSpecificOutput"] as? [String: Any])
-        XCTAssertEqual(output["permissionDecision"] as? String, "allow")
+        let decision = try XCTUnwrap(output["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "allow")
         // No persistent/scope field leaks into the hook output.
-        XCTAssertNil(output["scopeHint"])
-        XCTAssertNil(output["alwaysAllow"])
+        XCTAssertNil(decision["scopeHint"])
+        XCTAssertNil(decision["alwaysAllow"])
     }
 
     // MARK: - Helpers

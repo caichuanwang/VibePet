@@ -71,15 +71,16 @@ final class HookRuntimeTests: XCTestCase {
             }
         )
 
-        let outcome = await runtime.run(stdin: try bashPreToolUse(), env: [:])
+        let outcome = await runtime.run(stdin: try bashPermissionRequest(), env: [:])
 
         guard case let .responded(data) = outcome else {
             return XCTFail("Expected .responded, got \(outcome)")
         }
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let output = try XCTUnwrap(object["hookSpecificOutput"] as? [String: Any])
-        XCTAssertEqual(output["permissionDecision"] as? String, "deny")
-        XCTAssertEqual(output["permissionDecisionReason"] as? String, "no")
+        let decision = try XCTUnwrap(output["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "deny")
+        XCTAssertEqual(decision["message"] as? String, "no")
     }
 
     func testDecisionDeferResponseProducesNoOutput() async throws {
@@ -91,7 +92,7 @@ final class HookRuntimeTests: XCTestCase {
             }
         )
 
-        let outcome = await runtime.run(stdin: try bashPreToolUse(), env: [:])
+        let outcome = await runtime.run(stdin: try bashPermissionRequest(), env: [:])
 
         guard case let .responded(data) = outcome else {
             return XCTFail("Expected .responded, got \(outcome)")
@@ -106,7 +107,7 @@ final class HookRuntimeTests: XCTestCase {
             sendDecision: { _ in throw StubError() }
         )
 
-        let outcome = await runtime.run(stdin: try bashPreToolUse(), env: [:])
+        let outcome = await runtime.run(stdin: try bashPermissionRequest(), env: [:])
 
         XCTAssertEqual(outcome, .deferred)
     }
@@ -114,13 +115,13 @@ final class HookRuntimeTests: XCTestCase {
     func testDecisionWithNoInjectedSenderDefers() async throws {
         // Default decision sender throws → fail open rather than crash.
         let runtime = HookRuntime(adapter: ClaudeCodeAdapter(), sendNotification: { _ in })
-        let outcome = await runtime.run(stdin: try bashPreToolUse(), env: [:])
+        let outcome = await runtime.run(stdin: try bashPermissionRequest(), env: [:])
         XCTAssertEqual(outcome, .deferred)
     }
 
-    private func bashPreToolUse() throws -> Data {
+    private func bashPermissionRequest() throws -> Data {
         try JSONSerialization.data(withJSONObject: [
-            "hook_event_name": "PreToolUse",
+            "hook_event_name": "PermissionRequest",
             "session_id": "a1b2c3d4",
             "cwd": "/tmp/proj",
             "tool_name": "Bash",

@@ -15,11 +15,12 @@ public struct CodexConfigWriter: ToolConfigWriter {
     public let tool: ToolKind = .codex
     public let configURL: URL
     public let hooksURL: URL
-    public var managedHookKeys: [String] { ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit", "PostToolUse"] }
+    public var managedHookKeys: [String] { ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit"] }
     public var managedFiles: [URL] { [configURL, hooksURL] }
 
     private let hookBinaryPath: String
 
+    private static let legacyManagedHookKeys = ["PostToolUse"]
     static let managedStatusMessage = "Managed by VibePet"
     /// Feature flag Codex ≥ 0.130 uses to enable hooks.
     static let featureKey = "hooks"
@@ -71,9 +72,17 @@ public struct CodexConfigWriter: ToolConfigWriter {
         var hooks = (root["hooks"] as? [String: Any]) ?? [:]
         let timeouts = ["PermissionRequest": Self.permissionTimeout, "Stop": Self.stopTimeout]
 
-        for event in managedHookKeys {
+        for event in managedHookKeys + Self.legacyManagedHookKeys {
             var groups = (hooks[event] as? [[String: Any]]) ?? []
             groups.removeAll { isManagedGroup($0) } // idempotent
+            guard managedHookKeys.contains(event) else {
+                if groups.isEmpty {
+                    hooks.removeValue(forKey: event)
+                } else {
+                    hooks[event] = groups
+                }
+                continue
+            }
             groups.append(managedGroup(command: command, timeout: timeouts[event] ?? Self.stopTimeout))
             hooks[event] = groups
         }
@@ -86,7 +95,7 @@ public struct CodexConfigWriter: ToolConfigWriter {
         var root = readHooksRoot()
         guard var hooks = root["hooks"] as? [String: Any] else { return }
 
-        for event in managedHookKeys {
+        for event in managedHookKeys + Self.legacyManagedHookKeys {
             guard var groups = hooks[event] as? [[String: Any]] else { continue }
             groups.removeAll { isManagedGroup($0) }
             if groups.isEmpty {

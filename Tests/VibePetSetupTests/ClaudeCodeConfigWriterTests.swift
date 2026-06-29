@@ -8,11 +8,11 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
     private let binaryPath = "/Users/dev/Library/Application Support/VibePet/bin/VibePetHooks"
     private let managedHookKeys = [
         "PreToolUse",
+        "PermissionRequest",
         "Stop",
         "Notification",
         "SessionStart",
         "UserPromptSubmit",
-        "PostToolUse",
         "SubagentStart",
         "SubagentStop",
         "SessionEnd",
@@ -61,11 +61,29 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         // User's PreToolUse entry survives alongside VibePet's.
         XCTAssertTrue(commands(in: hooks, key: "PreToolUse").contains("/usr/local/bin/user-audit"))
         XCTAssertTrue(commands(in: hooks, key: "PreToolUse").contains { $0.contains(binaryPath) })
-        // User's PostToolUse survives alongside the new lifecycle entry.
+        // User's PostToolUse survives, but VibePet no longer adds a status-only hook there.
         let postToolUseCommands = commands(in: hooks, key: "PostToolUse")
-        XCTAssertEqual(postToolUseCommands.count, 2)
-        XCTAssertEqual(postToolUseCommands.first, "/usr/local/bin/user-postlog")
-        XCTAssertTrue(postToolUseCommands[1].contains(binaryPath))
+        XCTAssertEqual(postToolUseCommands, ["/usr/local/bin/user-postlog"])
+    }
+
+    func testInstallRemovesLegacyManagedPostToolUseHook() throws {
+        let url = try emptyConfig()
+        try Data("""
+        {
+          "hooks": {
+            "PostToolUse": [
+              { "matcher": "", "hooks": [ { "type": "command", "command": "'\(binaryPath)'" } ] },
+              { "matcher": "", "hooks": [ { "type": "command", "command": "/usr/local/bin/user-postlog" } ] }
+            ]
+          }
+        }
+        """.utf8).write(to: url)
+        let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
+
+        try writer.install(arguments: [])
+
+        let hooks = try hooksObject(url)
+        XCTAssertEqual(commands(in: hooks, key: "PostToolUse"), ["/usr/local/bin/user-postlog"])
     }
 
     func testInstallIsIdempotent() throws {
@@ -82,17 +100,17 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         }
     }
 
-    func testPreToolUseCarriesFiniteDecisionTimeoutButOthersDoNot() throws {
+    func testPermissionRequestCarriesFiniteDecisionTimeoutButOthersDoNot() throws {
         let url = try emptyConfig()
         let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
 
         try writer.install(arguments: [])
 
         let hooks = try hooksObject(url)
-        let preToolUseTimeout = try XCTUnwrap(vibePetTimeout(in: hooks, key: "PreToolUse"))
-        XCTAssertEqual(preToolUseTimeout, ClaudeCodeConfigWriter.managedDecisionTimeout)
-        XCTAssertGreaterThan(preToolUseTimeout, 0, "PreToolUse timeout is the finite tool-side fail-open backstop")
-        for key in managedHookKeys where key != "PreToolUse" {
+        let permissionRequestTimeout = try XCTUnwrap(vibePetTimeout(in: hooks, key: "PermissionRequest"))
+        XCTAssertEqual(permissionRequestTimeout, ClaudeCodeConfigWriter.managedDecisionTimeout)
+        XCTAssertGreaterThan(permissionRequestTimeout, 0, "PermissionRequest timeout is the finite tool-side fail-open backstop")
+        for key in managedHookKeys where key != "PermissionRequest" {
             XCTAssertNil(vibePetTimeout(in: hooks, key: key), "\(key) is fire-and-forget and should not set a timeout")
         }
     }

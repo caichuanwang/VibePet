@@ -65,7 +65,7 @@ public struct HookInstaller: Sendable {
 
         // Idempotent: already installed and current → only persist a possible binary version bump.
         // If the managed hook set changed, rewrite config so existing users pick up
-        // newly managed lifecycle hooks such as Codex PostToolUse.
+        // additions or removals such as retiring status-only lifecycle hooks.
         if let existing = manifest.tools[tool.rawValue],
            existing.installed,
            Set(existing.writtenHooks) == Set(writer.managedHookKeys) {

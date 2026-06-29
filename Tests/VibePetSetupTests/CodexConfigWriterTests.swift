@@ -8,7 +8,7 @@ import XCTest
 /// idempotent; uninstall removes only VibePet's entries and the managed feature flag.
 final class CodexConfigWriterTests: XCTestCase {
     private let binaryPath = "/Users/dev/Library/Application Support/VibePet/bin/VibePetHooks"
-    private let managedHookKeys = ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit", "PostToolUse"]
+    private let managedHookKeys = ["PermissionRequest", "Stop", "SessionStart", "UserPromptSubmit"]
 
     func testInstallWritesManagedHooksWithMarkerAndToolArg() throws {
         let dir = try tempCodexDir()
@@ -29,15 +29,14 @@ final class CodexConfigWriterTests: XCTestCase {
         }
     }
 
-    func testPostToolUseUsesNonBlockingTimeout() throws {
+    func testInstallDoesNotWritePostToolUseHook() throws {
         let dir = try tempCodexDir()
         let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
 
         try writer.install(arguments: ["--tool", "codex"])
 
         let hooks = try hooksObject(dir)
-        let postToolUse = try XCTUnwrap(innerHooks(in: hooks, event: "PostToolUse").first)
-        XCTAssertEqual(postToolUse["timeout"] as? Int, CodexConfigWriter.stopTimeout)
+        XCTAssertTrue(innerHooks(in: hooks, event: "PostToolUse").isEmpty)
     }
 
     func testQuotesBinaryPathForEveryManagedHook() throws {
@@ -81,6 +80,37 @@ final class CodexConfigWriterTests: XCTestCase {
         for event in managedHookKeys {
             XCTAssertFalse(innerHooks(in: hooks, event: event).isEmpty, "\(event) managed hook added")
         }
+        XCTAssertTrue(innerHooks(in: hooks, event: "PostToolUse").isEmpty, "PostToolUse should not be registered for status-only bubbles")
+    }
+
+    func testInstallRemovesLegacyManagedPostToolUseHook() throws {
+        let dir = try tempCodexDir()
+        let hooksURL = dir.appendingPathComponent("hooks.json")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("""
+        {
+          "hooks": {
+            "PostToolUse": [
+              {
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "'\(binaryPath)' --tool codex",
+                    "timeout": 45,
+                    "statusMessage": "Managed by VibePet"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+        """.utf8).write(to: hooksURL)
+        let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
+
+        try writer.install(arguments: ["--tool", "codex"])
+
+        let hooks = try hooksObject(dir)
+        XCTAssertTrue(innerHooks(in: hooks, event: "PostToolUse").isEmpty)
     }
 
     func testInstallIsIdempotent() throws {

@@ -2,7 +2,7 @@ import XCTest
 @testable import VibePetCore
 
 /// M4-8: end-to-end approval round trip across the real CLI path — stdin →
-/// `ClaudeCodeAdapter` (PreToolUse → approval) → `HookRuntime` blocking send →
+/// `ClaudeCodeAdapter` (PermissionRequest → approval) → `HookRuntime` blocking send →
 /// `BridgeServer` decision reply → `encodeResponse` → stdout — plus the fail-open
 /// timing guarantees. The approval card itself is App UI (covered by App tests /
 /// manual demo); here we prove the blocking transport + encode contract.
@@ -13,8 +13,9 @@ final class ApprovalFlowTests: XCTestCase {
             return XCTFail("Expected .responded, got \(response)")
         }
         let output = try hookOutput(data)
-        XCTAssertEqual(output["permissionDecision"] as? String, "deny")
-        XCTAssertEqual(output["permissionDecisionReason"] as? String, "用户拒绝")
+        let decision = try XCTUnwrap(output["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "deny")
+        XCTAssertEqual(decision["message"] as? String, "用户拒绝")
     }
 
     func testAllowOnceRoundTripEncodesAllowToStdout() async throws {
@@ -23,7 +24,8 @@ final class ApprovalFlowTests: XCTestCase {
             return XCTFail("Expected .responded, got \(response)")
         }
         let output = try hookOutput(data)
-        XCTAssertEqual(output["permissionDecision"] as? String, "allow")
+        let decision = try XCTUnwrap(output["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "allow")
     }
 
     func testDeferReplyProducesNoStdout() async throws {
@@ -44,7 +46,7 @@ final class ApprovalFlowTests: XCTestCase {
         )
 
         let started = Date()
-        let outcome = await runtime.run(stdin: fixture("pretooluse-bash.json"), env: [:])
+        let outcome = await runtime.run(stdin: fixture("permission-request-bash.json"), env: [:])
         let elapsed = Date().timeIntervalSince(started)
 
         XCTAssertEqual(outcome, .deferred)
@@ -67,7 +69,7 @@ final class ApprovalFlowTests: XCTestCase {
             adapter: ClaudeCodeAdapter(),
             client: BridgeClient(socketPath: socketPath, readTimeout: 0.4)
         )
-        let outcome = await runtime.run(stdin: fixture("pretooluse-bash.json"), env: [:])
+        let outcome = await runtime.run(stdin: fixture("permission-request-bash.json"), env: [:])
         XCTAssertEqual(outcome, .deferred)
     }
 
@@ -94,7 +96,7 @@ final class ApprovalFlowTests: XCTestCase {
         process.standardError = Pipe()
         try process.run()
 
-        stdinPipe.fileHandleForWriting.write(fixture("pretooluse-bash.json"))
+        stdinPipe.fileHandleForWriting.write(fixture("permission-request-bash.json"))
         try stdinPipe.fileHandleForWriting.close()
 
         let deadline = Date().addingTimeInterval(6)
@@ -109,8 +111,9 @@ final class ApprovalFlowTests: XCTestCase {
         XCTAssertEqual(process.terminationStatus, 0, "hook CLI must exit 0")
         let stdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let output = try hookOutput(stdout)
-        XCTAssertEqual(output["permissionDecision"] as? String, "deny")
-        XCTAssertEqual(output["permissionDecisionReason"] as? String, "blocked")
+        let decision = try XCTUnwrap(output["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "deny")
+        XCTAssertEqual(decision["message"] as? String, "blocked")
     }
 
     // MARK: - Helpers
@@ -130,7 +133,7 @@ final class ApprovalFlowTests: XCTestCase {
             adapter: ClaudeCodeAdapter(),
             client: BridgeClient(socketPath: socketPath, readTimeout: 5)
         )
-        return await runtime.run(stdin: fixture("pretooluse-bash.json"), env: [:])
+        return await runtime.run(stdin: fixture("permission-request-bash.json"), env: [:])
     }
 
     private func hookOutput(_ data: Data) throws -> [String: Any] {

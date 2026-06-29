@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PermissionRequest",
+  "session_id": "a1b2c3d4e5f6",
+  "cwd": "/Users/dev/Projects/VibePet",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "swift test",
+    "description": "Run the test suite"
+  }
+}

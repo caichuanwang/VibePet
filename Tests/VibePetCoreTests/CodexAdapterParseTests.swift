@@ -152,15 +152,9 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertEqual(summary, "User prompt: Run the tests")
     }
 
-    func testPostToolUseBecomesActivityUpdated() throws {
-        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("post-tool-use.json"), env: [:]))
-
-        XCTAssertFalse(envelope.content.needsResponse)
-        guard case let .activityUpdated(sessionID, _, summary) = envelope.agentEvent else {
-            return XCTFail("Expected activityUpdated, got \(String(describing: envelope.agentEvent))")
-        }
-        XCTAssertEqual(sessionID, "9f8e7d6c5b4a3210")
-        XCTAssertEqual(summary, "Codex PostToolUse: Bash")
+    func testPostToolUseIsIgnored() throws {
+        XCTAssertNil(try adapter.parseEvent(stdin: fixture("post-tool-use.json"), env: [:]))
+        XCTAssertNil(try adapter.parseAgentEvent(stdin: fixture("post-tool-use.json"), env: [:]))
     }
 
     func testPostToolUseMissingSessionIDIsIgnored() throws {

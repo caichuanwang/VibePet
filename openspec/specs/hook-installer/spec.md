@@ -23,8 +23,8 @@ Define `VibePetSetup` install/uninstall/status behavior: copying the hook binary
 ### Requirement: Manifest-driven idempotent install
 
 `VibePetSetup install` SHALL be idempotent and driven by `~/Library/Application Support/VibePet/install-manifest.json`. It SHALL detect existing tool config, present the files/binary/backup it will change for confirmation, back up the original config, copy/upgrade the binary, write the VibePet hook entries, and update the manifest recording per-tool `installed`, `settingsPath`, `writtenHooks`, `backupPath`, and `hookBinaryVersion`. If a target hook key already holds a user's non-VibePet entry, install SHALL append rather than overwrite. Tool-specific writes:
-- **Claude Code**: `~/.claude/settings.json` (JSON) hook keys `PreToolUse` / `Stop` / `Notification` plus the lifecycle keys `SessionStart` / `UserPromptSubmit` / `PostToolUse` / `SubagentStart` / `SubagentStop` / `SessionEnd` / `StopFailure` / `PermissionDenied` / `PreCompact`.
-- **Codex** (open-vibe-island pattern): hook entries in `~/.codex/hooks.json` (JSON) for `PermissionRequest` + `Stop` + `SessionStart` + `UserPromptSubmit` plus the `PostToolUse` activity-heartbeat key, each marked `statusMessage: "Managed by VibePet"`; and `~/.codex/config.toml` gets only a `[features]` `hooks = true` flag toggled via line-based editing (never adding a root key after a table). The Codex hook command carries `--tool codex`.
+- **Claude Code**: `~/.claude/settings.json` (JSON) hook keys `PreToolUse` / `Stop` / `Notification` plus the lifecycle keys `SessionStart` / `UserPromptSubmit` / `SubagentStart` / `SubagentStop` / `SessionEnd` / `StopFailure` / `PermissionDenied` / `PreCompact`.
+- **Codex** (open-vibe-island pattern): hook entries in `~/.codex/hooks.json` (JSON) for `PermissionRequest` + `Stop` + `SessionStart` + `UserPromptSubmit`, each marked `statusMessage: "Managed by VibePet"`; and `~/.codex/config.toml` gets only a `[features]` `hooks = true` flag toggled via line-based editing (never adding a root key after a table). The Codex hook command carries `--tool codex`.
 
 Because 0.3 removes the App-side decision deadline, each tool's per-hook tool-side `timeout` is the sole fail-open backstop for an unanswered decision; it MUST stay large enough to give the user time to respond yet finite so an unanswered request eventually falls back to the tool's native flow.
 
@@ -43,15 +43,21 @@ Because 0.3 removes the App-side decision deadline, each tool's per-hook tool-si
 - **WHEN** the target hook key already contains a user's non-VibePet entry
 - **THEN** install appends the VibePet entry without overwriting the user's entry
 
-#### Scenario: Codex PostToolUse hook entry is registered and recorded
+#### Scenario: Codex PostToolUse hook entry is not registered
 
 - **WHEN** `install` runs for Codex
-- **THEN** a managed `PostToolUse` hook entry is written to `~/.codex/hooks.json` alongside `PermissionRequest` / `Stop` / `SessionStart` / `UserPromptSubmit`, marked `statusMessage: "Managed by VibePet"`, and recorded in the manifest's `writtenHooks`
+- **THEN** no managed `PostToolUse` hook entry is written to `~/.codex/hooks.json` or recorded in the manifest's `writtenHooks`
+
+#### Scenario: Legacy managed PostToolUse entries are removed
+
+- **GIVEN** a previous VibePet install wrote a managed `PostToolUse` hook entry
+- **WHEN** `install` or repair rewrites the tool config
+- **THEN** the VibePet-managed `PostToolUse` entry is removed while user-authored `PostToolUse` hooks are preserved
 
 #### Scenario: New Claude lifecycle hook entries are registered and recorded
 
 - **WHEN** `install` runs for Claude Code
-- **THEN** the lifecycle hook keys (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `SubagentStart`, `SubagentStop`, `SessionEnd`, `StopFailure`, `PermissionDenied`, `PreCompact`) are written and recorded in the manifest's `writtenHooks`
+- **THEN** the lifecycle hook keys (`SessionStart`, `UserPromptSubmit`, `SubagentStart`, `SubagentStop`, `SessionEnd`, `StopFailure`, `PermissionDenied`, `PreCompact`) are written and recorded in the manifest's `writtenHooks`
 
 #### Scenario: Hook command paths are single-quoted
 

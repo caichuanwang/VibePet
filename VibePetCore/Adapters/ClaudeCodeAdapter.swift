@@ -1,10 +1,8 @@
 import Foundation
 
-/// Normalizes Claude Code hook events into the bridge protocol. M3 covered the
-/// notification subset (`Stop` → `.completion`, `Notification` → `.status`); M4
-/// adds `PreToolUse` (≠ `AskUserQuestion`) → `.approval` parsing and approval
-/// response encoding. M5 (spike verified, Claude Code ≥ 2.1.85) adds
-/// `AskUserQuestion` → `.question` parsing and answer write-back via `updatedInput`.
+/// Normalizes Claude Code hook events into the bridge protocol. Lifecycle hooks
+/// update session state without asking the user; `PermissionRequest` is the
+/// blocking interaction path for both approvals and `AskUserQuestion`.
 public struct ClaudeCodeAdapter: ToolAdapter {
     public let tool: ToolKind = .claudeCode
 
@@ -54,7 +52,7 @@ public struct ClaudeCodeAdapter: ToolAdapter {
         let agentEvent = makeAgentEvent(from: object, source: source)
 
         switch eventName {
-        case "SessionStart", "UserPromptSubmit", "PostToolUse", "SubagentStart", "SubagentStop", "PreCompact", "PermissionDenied", "SessionEnd", "StopFailure":
+        case "SessionStart", "UserPromptSubmit", "PreToolUse", "SubagentStart", "SubagentStop", "PreCompact", "PermissionDenied", "SessionEnd", "StopFailure":
             guard let agentEvent else { return nil }
             return makeEnvelope(
                 source: source,
@@ -76,7 +74,7 @@ public struct ClaudeCodeAdapter: ToolAdapter {
                 content: .status(StatusContent(text: singleLine(message))),
                 agentEvent: agentEvent
             )
-        case "PreToolUse":
+        case "PermissionRequest":
             if (object["tool_name"] as? String).flatMap(nonEmpty) == "AskUserQuestion" {
                 return makeQuestionEnvelope(from: object, source: source, agentEvent: agentEvent)
             }
@@ -89,6 +87,9 @@ public struct ClaudeCodeAdapter: ToolAdapter {
 
     public func parseAgentEvent(stdin: Data, env: [String: String]) throws -> AgentEvent? {
         guard let object = try? JSONSerialization.jsonObject(with: stdin) as? [String: Any] else {
+            return nil
+        }
+        if (object["hook_event_name"] as? String) == "PostToolUse" {
             return nil
         }
         return makeAgentEvent(from: object, source: makeSource(from: object, env: env))
@@ -108,11 +109,11 @@ public struct ClaudeCodeAdapter: ToolAdapter {
         }
     }
 
-    // MARK: - PreToolUse → approval
+    // MARK: - PermissionRequest → approval
 
-    /// Builds an `.approval` envelope from a `PreToolUse` event. `AskUserQuestion`
-    /// is routed to the question path by the caller, so the guard here is
-    /// defensive only.
+    /// Builds an `.approval` envelope from a `PermissionRequest` event.
+    /// `AskUserQuestion` is routed to the question path by the caller, so the guard
+    /// here is defensive only.
     private func makeApprovalEnvelope(
         from object: [String: Any],
         source: SourceInfo,
@@ -135,7 +136,8 @@ public struct ClaudeCodeAdapter: ToolAdapter {
             title: Self.approvalTitle(toolName: toolName),
             risk: risk,
             preview: preview,
-            // PreToolUse cannot grant a persistent allow (M4-3a spike: unsupported);
+            // Hook output cannot grant a persistent allow in VibePet's verified
+            // contract; leave nil so the UI hides "始终允许".
             // leave `alwaysAllow` nil so the UI hides "始终允许".
             alwaysAllow: nil,
             requiresTerminalApproval: false
@@ -190,12 +192,9 @@ public struct ClaudeCodeAdapter: ToolAdapter {
         return text.split(separator: "\n", omittingEmptySubsequences: false).count
     }
 
-    // MARK: - PreToolUse(AskUserQuestion) → question
+    // MARK: - PermissionRequest(AskUserQuestion) → question
 
-    /// Builds a `.question` envelope from an `AskUserQuestion` PreToolUse event.
-    /// Verified mechanism (M5-0 spike, Claude Code ≥ 2.1.85): a PreToolUse hook can
-    /// satisfy `AskUserQuestion` by returning `updatedInput` + `permissionDecision:
-    /// "allow"`, so VibePet answers it in-bubble and writes the answer back.
+    /// Builds a `.question` envelope from an `AskUserQuestion` permission request.
     /// Field names per the `AskUserQuestion` input schema: `questions[].{question,
     /// header, multiSelect, options[].{label, description}}`.
     private func makeQuestionEnvelope(
@@ -249,10 +248,9 @@ public struct ClaudeCodeAdapter: ToolAdapter {
 
     // MARK: - Question response encoding
 
-    /// Encodes a question answer to the Claude Code `AskUserQuestion` hook output:
-    /// `permissionDecision:"allow"` + an `updatedInput` carrying the original
-    /// questions plus the user's answers, so the tool proceeds without prompting
-    /// natively (verified ≥ 2.1.85).
+    /// Encodes a question answer to the Claude Code `AskUserQuestion` permission
+    /// output: `decision.behavior:"allow"` + an `updatedInput` carrying the
+    /// original questions plus the user's answers.
     ///
     /// `updatedInput` *replaces* the whole tool input, so `questions` must be
     /// preserved alongside `answers`. `encodeResponse` only sees the normalized
@@ -294,9 +292,11 @@ public struct ClaudeCodeAdapter: ToolAdapter {
 
         let payload: [String: Any] = [
             "hookSpecificOutput": [
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "updatedInput": ["questions": questions, "answers": answersByQuestion],
+                "hookEventName": "PermissionRequest",
+                "decision": [
+                    "behavior": "allow",
+                    "updatedInput": ["questions": questions, "answers": answersByQuestion],
+                ],
             ],
         ]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
@@ -304,30 +304,31 @@ public struct ClaudeCodeAdapter: ToolAdapter {
 
     // MARK: - Approval response encoding
 
-    /// Encodes an approval decision to the Claude Code `PreToolUse` hook output.
-    /// `allowAlways` cannot be persisted via this hook (M4-3a), so it degrades to a
-    /// one-time allow; the UI hides the button when `alwaysAllow` is nil, making
-    /// that path defensive only.
+    /// Encodes an approval decision to the Claude Code `PermissionRequest` output.
+    /// `allowAlways` degrades to a one-time allow; the UI hides the button when
+    /// `alwaysAllow` is nil, making that path defensive only.
     static func encodeApproval(_ decision: ApprovalDecision) -> Data {
         switch decision {
         case let .deny(reason):
-            return permissionDecisionJSON(decision: "deny", reason: reason)
+            return permissionRequestDecisionJSON(behavior: "deny", message: reason)
         case .allowOnce:
-            return permissionDecisionJSON(decision: "allow", reason: nil)
+            return permissionRequestDecisionJSON(behavior: "allow", message: nil)
         case .allowAlways:
-            return permissionDecisionJSON(decision: "allow", reason: nil)
+            return permissionRequestDecisionJSON(behavior: "allow", message: nil)
         }
     }
 
-    private static func permissionDecisionJSON(decision: String, reason: String?) -> Data {
-        var hookOutput: [String: Any] = [
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-        ]
-        if let reason = reason.flatMap(nonEmpty) {
-            hookOutput["permissionDecisionReason"] = reason
+    private static func permissionRequestDecisionJSON(behavior: String, message: String?) -> Data {
+        var decision: [String: Any] = ["behavior": behavior]
+        if let message = message.flatMap(nonEmpty) {
+            decision["message"] = message
         }
-        let payload: [String: Any] = ["hookSpecificOutput": hookOutput]
+        let payload: [String: Any] = [
+            "hookSpecificOutput": [
+                "hookEventName": "PermissionRequest",
+                "decision": decision,
+            ],
+        ]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
 
@@ -427,16 +428,16 @@ public struct ClaudeCodeAdapter: ToolAdapter {
                 summary: lifecycleSummary(for: eventName, object: object),
                 jumpTarget: source.jumpTarget
             )
-        case "UserPromptSubmit", "PostToolUse", "SubagentStart", "SubagentStop", "PreCompact", "Notification":
+        case "UserPromptSubmit", "PreToolUse", "SubagentStart", "SubagentStop", "PreCompact", "Notification":
             return .activityUpdated(
                 sessionID: sessionID,
                 timestamp: timestamp,
                 summary: lifecycleSummary(for: eventName, object: object)
             )
-        case "PreToolUse":
+        case "PermissionRequest":
             let summary = lifecycleSummary(for: eventName, object: object)
             if (object["tool_name"] as? String).flatMap(nonEmpty) == "AskUserQuestion" {
-                return .questionAsked(sessionID: sessionID, timestamp: timestamp, summary: summary)
+                return .questionAsked(sessionID: sessionID, timestamp: timestamp, summary: Self.askQuestionTitle)
             }
             return .permissionRequested(sessionID: sessionID, timestamp: timestamp, summary: summary)
         case "Stop":
@@ -503,8 +504,6 @@ public struct ClaudeCodeAdapter: ToolAdapter {
             return "Claude Code session started"
         case "UserPromptSubmit":
             return "Claude Code received a prompt"
-        case "PostToolUse":
-            return "Claude Code finished a tool"
         case "SubagentStart":
             return "Claude Code subagent started"
         case "SubagentStop":

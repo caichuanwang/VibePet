@@ -7,11 +7,11 @@ import XCTest
 final class InstallManifestTests: XCTestCase {
     private let claudeManagedHookKeys = [
         "PreToolUse",
+        "PermissionRequest",
         "Stop",
         "Notification",
         "SessionStart",
         "UserPromptSubmit",
-        "PostToolUse",
         "SubagentStart",
         "SubagentStop",
         "SessionEnd",

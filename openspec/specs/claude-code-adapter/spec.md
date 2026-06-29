@@ -43,7 +43,7 @@ Define how `ClaudeCodeAdapter` normalizes Claude Code native hook events into `B
 
 `ClaudeCodeAdapter` SHALL normalize the full set of Claude Code lifecycle hooks into `AgentEvent`s keyed by `SourceInfo.sessionID`, in addition to producing `BridgeEnvelope` content where applicable:
 - `SessionStart` -> `sessionStarted`
-- `UserPromptSubmit`, `PostToolUse`, `SubagentStart`, `SubagentStop`, `PreCompact`, `Notification` -> `activityUpdated`
+- `UserPromptSubmit`, `SubagentStart`, `SubagentStop`, `PreCompact`, `Notification` -> `activityUpdated`
 - `PreToolUse` (tool_name != `AskUserQuestion`) -> `permissionRequested` (alongside the existing `.approval` content)
 - `PreToolUse` with `AskUserQuestion` -> `questionAsked`
 - `Stop` -> `sessionCompleted`; `StopFailure` -> `sessionCompleted` with the error flag; `SessionEnd` -> `sessionCompleted` with the session-end flag
@@ -56,10 +56,10 @@ Only `PreToolUse`(decision) stays on the blocking decision channel; every other 
 - **WHEN** `parseEvent` is given a Claude Code `SessionStart` event with a `session_id`
 - **THEN** it yields an `AgentEvent.sessionStarted` carrying that `sessionID`
 
-#### Scenario: PostToolUse becomes activityUpdated
+#### Scenario: PostToolUse is ignored
 
 - **WHEN** `parseEvent` is given a `PostToolUse` event
-- **THEN** it yields an `AgentEvent.activityUpdated` for the session, not a decision-channel event
+- **THEN** it returns `nil` and does not produce a status bubble or activity update
 
 #### Scenario: StopFailure marks an errored completion
 

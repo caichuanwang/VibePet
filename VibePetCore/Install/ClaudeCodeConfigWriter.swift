@@ -1,21 +1,21 @@
 import Foundation
 
-/// Writes VibePet's hook entries into Claude Code's `settings.json` (JSON), under
-/// `hooks.PreToolUse` / `hooks.Stop` / `hooks.Notification` (technical design §4.1).
+/// Writes VibePet's hook entries into Claude Code's `settings.json` (JSON).
 /// Each managed key gets one VibePet matcher-group whose command points at the stable
 /// binary; user entries (and unmanaged keys / top-level settings) are preserved.
 /// VibePet's entries are identified by the stable binary path in their command, so
 /// install is idempotent and uninstall is precise.
 public struct ClaudeCodeConfigWriter: ToolConfigWriter {
     public let tool: ToolKind = .claudeCode
+    private static let legacyManagedHookKeys = ["PostToolUse"]
     public let configURL: URL
     public let managedHookKeys = [
         "PreToolUse",
+        "PermissionRequest",
         "Stop",
         "Notification",
         "SessionStart",
         "UserPromptSubmit",
-        "PostToolUse",
         "SubagentStart",
         "SubagentStop",
         "SessionEnd",
@@ -26,7 +26,7 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
 
     private let hookBinaryPath: String
 
-    /// Seconds Claude Code waits for the blocking `PreToolUse` hook before killing it.
+    /// Seconds Claude Code waits for the blocking `PermissionRequest` hook before killing it.
     /// With no App-side decision countdown, this tool-side timeout is the finite
     /// fail-open backstop for unanswered decisions.
     public static let managedDecisionTimeout = 86_400
@@ -45,9 +45,17 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
         // fail to launch. Mirrors CodexConfigWriter's shell-quoting.
         let command = ([Self.shellQuote(hookBinaryPath)] + arguments).joined(separator: " ")
 
-        for key in managedHookKeys {
+        for key in managedHookKeys + Self.legacyManagedHookKeys {
             var groups = (hooks[key] as? [[String: Any]]) ?? []
             groups.removeAll { isVibePetGroup($0) } // drop any prior VibePet entry (idempotent)
+            guard managedHookKeys.contains(key) else {
+                if groups.isEmpty {
+                    hooks.removeValue(forKey: key)
+                } else {
+                    hooks[key] = groups
+                }
+                continue
+            }
             groups.append(entry(command: command, key: key))
             hooks[key] = groups
         }
@@ -55,12 +63,12 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
         try write(root)
     }
 
-    /// The matcher-group VibePet writes for a hook key. Only `PreToolUse` (the blocking
-    /// approval/question round trip) carries a `timeout`; `Stop`/`Notification` are
-    /// fire-and-forget and use Claude's default.
+    /// The matcher-group VibePet writes for a hook key. Only `PermissionRequest`
+    /// (the blocking approval/question round trip) carries a `timeout`; lifecycle
+    /// hooks are fire-and-forget and use Claude's default.
     private func entry(command: String, key: String) -> [String: Any] {
         var hook: [String: Any] = ["type": "command", "command": command]
-        if key == "PreToolUse" {
+        if key == "PermissionRequest" {
             hook["timeout"] = Self.managedDecisionTimeout
         }
         return ["matcher": "", "hooks": [hook]]
@@ -71,7 +79,7 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
         var root = readRoot()
         guard var hooks = root["hooks"] as? [String: Any] else { return }
 
-        for key in managedHookKeys {
+        for key in managedHookKeys + Self.legacyManagedHookKeys {
             guard var groups = hooks[key] as? [[String: Any]] else { continue }
             groups.removeAll { isVibePetGroup($0) }
             if groups.isEmpty {

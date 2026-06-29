@@ -2,9 +2,8 @@ import XCTest
 @testable import VibePetCore
 
 /// M5-3: a `.question(QuestionAnswer)` response encodes to Claude Code's
-/// `AskUserQuestion` hook output — `permissionDecision:"allow"` + an `updatedInput`
-/// that carries the questions plus the user's answers (keyed by question text), so
-/// the tool proceeds without a native prompt (verified ≥ 2.1.85). No usable
+/// `AskUserQuestion` permission-request output: allow + `updatedInput` carrying
+/// the questions plus the user's answers (keyed by question text). No usable
 /// selection defers (no JSON), keeping the path fail-open.
 final class ClaudeCodeQuestionEncodeTests: XCTestCase {
     private let adapter = ClaudeCodeAdapter()
@@ -15,10 +14,11 @@ final class ClaudeCodeQuestionEncodeTests: XCTestCase {
 
         let output = try decode(adapter.encodeResponse(.question(answer), for: envelope))
         let hook = try XCTUnwrap(output["hookSpecificOutput"] as? [String: Any])
-        XCTAssertEqual(hook["hookEventName"] as? String, "PreToolUse")
-        XCTAssertEqual(hook["permissionDecision"] as? String, "allow")
+        XCTAssertEqual(hook["hookEventName"] as? String, "PermissionRequest")
 
-        let updatedInput = try XCTUnwrap(hook["updatedInput"] as? [String: Any])
+        let decision = try XCTUnwrap(hook["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "allow")
+        let updatedInput = try XCTUnwrap(decision["updatedInput"] as? [String: Any])
         let answers = try XCTUnwrap(updatedInput["answers"] as? [String: String])
         // `answers` is keyed by question text, not header — translated via the item.
         XCTAssertEqual(answers["Which database should we use?"], "SQLite")
@@ -39,7 +39,9 @@ final class ClaudeCodeQuestionEncodeTests: XCTestCase {
         let answer = QuestionAnswer(answers: ["Features": "A, B"])
 
         let output = try decode(adapter.encodeResponse(.question(answer), for: envelope))
-        let updatedInput = try XCTUnwrap((output["hookSpecificOutput"] as? [String: Any])?["updatedInput"] as? [String: Any])
+        let hook = try XCTUnwrap(output["hookSpecificOutput"] as? [String: Any])
+        let decision = try XCTUnwrap(hook["decision"] as? [String: Any])
+        let updatedInput = try XCTUnwrap(decision["updatedInput"] as? [String: Any])
         let answers = try XCTUnwrap(updatedInput["answers"] as? [String: String])
         XCTAssertEqual(answers["Which features?"], "A, B")
     }
@@ -64,12 +66,12 @@ final class ClaudeCodeQuestionEncodeTests: XCTestCase {
     // MARK: - Helpers
 
     private func questionEnvelope() throws -> BridgeEnvelope {
-        try XCTUnwrap(adapter.parseEvent(stdin: fixture("ask-user-question.json"), env: [:]))
+        try XCTUnwrap(adapter.parseEvent(stdin: fixture("permission-request-ask-user-question.json"), env: [:]))
     }
 
     private func multiSelectEnvelope() throws -> BridgeEnvelope {
         let stdin = try JSONSerialization.data(withJSONObject: [
-            "hook_event_name": "PreToolUse",
+            "hook_event_name": "PermissionRequest",
             "tool_name": "AskUserQuestion",
             "tool_input": [
                 "questions": [[
