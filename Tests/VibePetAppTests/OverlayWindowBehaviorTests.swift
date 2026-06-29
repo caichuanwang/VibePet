@@ -53,6 +53,28 @@ final class OverlayWindowBehaviorTests: XCTestCase {
         assertStationaryAllSpaces(panel.collectionBehavior)
     }
 
+    @MainActor
+    func testDashboardPanelClipsHostedContentToRoundedChrome() {
+        let controller = SessionDashboardWindowController(
+            state: SessionState(),
+            activePetName: "Pixel",
+            petFrame: CGRect(x: 0, y: 0, width: 120, height: 120),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            cardProvider: { _ in nil },
+            onSelectedSessionChanged: { _, _ in }
+        )
+
+        guard let effectView = controller.window?.contentView as? NSVisualEffectView else {
+            XCTFail("dashboard should use a visual effect content view")
+            return
+        }
+
+        XCTAssertEqual(effectView.layer?.cornerRadius, BubbleTheme.dashboardCornerRadius)
+        XCTAssertEqual(effectView.layer?.masksToBounds, true)
+        XCTAssertEqual(effectView.subviews.first?.layer?.cornerRadius, BubbleTheme.dashboardCornerRadius)
+        XCTAssertEqual(effectView.subviews.first?.layer?.masksToBounds, true)
+    }
+
     private func assertStationaryAllSpaces(
         _ behavior: NSWindow.CollectionBehavior,
         file: StaticString = #filePath,

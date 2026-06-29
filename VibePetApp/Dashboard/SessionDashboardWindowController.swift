@@ -41,13 +41,15 @@ final class SessionDashboardWindowController: NSWindowController, NSWindowDelega
         effectView.state = .active
         effectView.appearance = NSAppearance(named: .vibrantDark)
         effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = 14
+        effectView.layer?.cornerRadius = BubbleTheme.dashboardCornerRadius
         effectView.layer?.masksToBounds = true
 
         let hosted = hostingController.view
         hosted.translatesAutoresizingMaskIntoConstraints = false
         hosted.wantsLayer = true
         hosted.layer?.backgroundColor = NSColor.clear.cgColor
+        hosted.layer?.cornerRadius = BubbleTheme.dashboardCornerRadius
+        hosted.layer?.masksToBounds = true
         effectView.addSubview(hosted)
         NSLayoutConstraint.activate([
             hosted.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),

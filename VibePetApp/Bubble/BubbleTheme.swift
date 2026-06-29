@@ -30,6 +30,7 @@ enum BubbleTheme {
     static let dashboardSecondaryText = Color.white.opacity(0.64)
     static let dashboardPillBackground = Color.white.opacity(0.10)
     static let dashboardActivePillBackground = Color.white.opacity(0.20)
+    static let dashboardCornerRadius: CGFloat = 14
 
     static let headerFont = Font.caption2
     static let bodyFont = Font.callout

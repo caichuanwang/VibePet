@@ -43,6 +43,7 @@ enum DashboardTranscriptLayout {
 private struct DashboardTranscriptContent: View {
     let session: AgentSession
     let detailSummary: String
+    let onJump: (JumpTarget) -> Void
 
     private var bodyText: String {
         DashboardTranscriptDisplayText.plainText(from: detailSummary)
@@ -64,6 +65,10 @@ private struct DashboardTranscriptContent: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            SessionDashboardView.jumpBack(to: session.jumpTarget, onJump: onJump)
+        }
     }
 
     private var statusIcon: String {
@@ -180,6 +185,12 @@ struct SessionDashboardView: View {
     @State private var selectedSessionID: String?
     @State private var selectedSessionJumpTarget: JumpTarget?
 
+    static func jumpBack(to jumpTarget: JumpTarget?, onJump: (JumpTarget) -> Void) {
+        if let jumpTarget {
+            onJump(jumpTarget)
+        }
+    }
+
     var body: some View {
         let projection = projection
         let resolvedSelection = projection.resolvedSelection(current: selectedSessionID)
@@ -191,6 +202,7 @@ struct SessionDashboardView: View {
         }
         .frame(width: 520, height: 300)
         .background(BubbleTheme.dashboardPanelTint)
+        .clipShape(RoundedRectangle(cornerRadius: BubbleTheme.dashboardCornerRadius, style: .continuous))
         .onAppear {
             applyResolvedSelection(resolvedSelection)
         }
@@ -265,10 +277,7 @@ struct SessionDashboardView: View {
 
     private func sessionRow(_ row: SessionDashboardProjection.Row, isSelected: Bool) -> some View {
         Button {
-            let jumpTarget = model.state.sessionsByID[row.id]?.jumpTarget
-            selectedSessionID = row.id
-            selectedSessionJumpTarget = jumpTarget
-            onSelectedSessionChanged(row.id, jumpTarget)
+            selectSession(row.id)
         } label: {
             HStack(spacing: 7) {
                 Circle()
@@ -318,6 +327,13 @@ struct SessionDashboardView: View {
             )
         }
         .buttonStyle(.plain)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                let jumpTarget = model.state.sessionsByID[row.id]?.jumpTarget
+                selectSession(row.id)
+                Self.jumpBack(to: jumpTarget, onJump: onJump)
+            }
+        )
     }
 
     @ViewBuilder
@@ -375,7 +391,7 @@ struct SessionDashboardView: View {
                 card.view
                     .id(card.id)
             } else {
-                DashboardTranscriptContent(session: session, detailSummary: detailSummary)
+                DashboardTranscriptContent(session: session, detailSummary: detailSummary, onJump: onJump)
                     .id("\(session.id)-\(session.phase)-\(session.updatedAt.timeIntervalSince1970)")
             }
         }
@@ -383,6 +399,12 @@ struct SessionDashboardView: View {
         .clipped()
     }
 
+    private func selectSession(_ selection: String) {
+        let jumpTarget = model.state.sessionsByID[selection]?.jumpTarget
+        selectedSessionID = selection
+        selectedSessionJumpTarget = jumpTarget
+        onSelectedSessionChanged(selection, jumpTarget)
+    }
 
     private func applyResolvedSelection(_ selection: String?) {
         let jumpTarget = selection.flatMap { model.state.sessionsByID[$0]?.jumpTarget }

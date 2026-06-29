@@ -47,6 +47,27 @@ final class BubbleJumpActionTests: XCTestCase {
         XCTAssertEqual(jumped, [target])
     }
 
+    func testDashboardJumpBackNoopsWithoutTarget() {
+        var jumped: [JumpTarget] = []
+
+        SessionDashboardView.jumpBack(to: nil) {
+            jumped.append($0)
+        }
+
+        XCTAssertTrue(jumped.isEmpty)
+    }
+
+    func testDashboardJumpBackInvokesActionOnceWhenTargetExists() {
+        let target = JumpTarget(terminalApp: "Ghostty", terminalSessionID: "ghostty-1")
+        var jumped: [JumpTarget] = []
+
+        SessionDashboardView.jumpBack(to: target) {
+            jumped.append($0)
+        }
+
+        XCTAssertEqual(jumped, [target])
+    }
+
     private func source(jumpTarget: JumpTarget?) -> SourceInfo {
         SourceInfo(
             tool: .claudeCode,
