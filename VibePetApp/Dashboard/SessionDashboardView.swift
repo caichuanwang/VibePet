@@ -181,6 +181,7 @@ struct SessionDashboardView: View {
     let cardProvider: (String) -> SessionDashboardCard?
     let onJump: (JumpTarget) -> Void
     let onSelectedSessionChanged: (String?, JumpTarget?) -> Void
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
 
     @State private var selectedSessionID: String?
     @State private var selectedSessionJumpTarget: JumpTarget?
@@ -216,7 +217,7 @@ struct SessionDashboardView: View {
     }
 
     private var projection: SessionDashboardProjection {
-        SessionDashboardProjection(state: model.state, activePetName: model.activePetName)
+        SessionDashboardProjection(state: model.state, activePetName: model.activePetName, localizer: localizer)
     }
 
     private func sidebar(projection: SessionDashboardProjection, selectedSessionID: String?) -> some View {
@@ -246,12 +247,12 @@ struct SessionDashboardView: View {
                 Circle()
                     .fill(BubbleTheme.dashboardStatusColor(projection.attentionCount > 0 ? .attention : .running))
                     .frame(width: 7, height: 7)
-                Text("Sessions")
+                Text(localizer.text(.dashboardSessionsTitle))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(BubbleTheme.dashboardPrimaryText)
                 Spacer(minLength: 0)
             }
-            Text("\(projection.totalCount) total · \(projection.runningCount) running · \(projection.attentionCount) action")
+            Text(localizer.text(.dashboardSummary, projection.totalCount, projection.runningCount, projection.attentionCount))
                 .font(.caption2)
                 .foregroundStyle(BubbleTheme.dashboardSecondaryText)
                 .lineLimit(1)
@@ -268,7 +269,7 @@ struct SessionDashboardView: View {
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(BubbleTheme.dashboardPrimaryText)
                 .lineLimit(1)
-            Text("no running sessions")
+            Text(localizer.text(.dashboardNoRunningSessions))
                 .font(.caption)
                 .foregroundStyle(BubbleTheme.dashboardSecondaryText)
         }
@@ -358,7 +359,7 @@ struct SessionDashboardView: View {
                 Text(projection.emptyPetName)
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(BubbleTheme.dashboardPrimaryText)
-                Text("No active agent sessions")
+                Text(localizer.text(.dashboardNoActiveSessions))
                     .font(.callout)
                     .foregroundStyle(BubbleTheme.dashboardSecondaryText)
             }
@@ -369,7 +370,7 @@ struct SessionDashboardView: View {
 
     private func userPromptHeader(_ prompt: String) -> some View {
         HStack(alignment: .top, spacing: 6) {
-            Text("You:")
+            Text(localizer.text(.dashboardUserPrefix))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(BubbleTheme.dashboardSecondaryText)
                 .lineLimit(1)

@@ -1,7 +1,5 @@
-## Purpose
+## MODIFIED Requirements
 
-Define the UI-independent application configuration model and its on-disk store.
-## Requirements
 ### Requirement: AppConfig model
 
 `VibePetCore` SHALL define an `AppConfig` `Codable` type holding at least: `activePetID`, enabled tools, active generator ID, pet position (within the main screen `visibleFrame`), an onboarding-completed marker indicating whether first-launch onboarding has finished, and a language preference for app-owned UI text. The onboarding-completed marker SHALL default to "not completed" so that an existing `config.json` written before this field existed decodes successfully and is treated as not-yet-onboarded. The language preference SHALL support Simplified Chinese and English, and SHALL default to Simplified Chinese for new configs and legacy configs without a language field. `AppConfig` SHALL NOT carry a consumed decision-timeout: 0.3 removes the App-side decision timeout, so no code path reads a `decisionTimeoutSeconds` value to bound a decision. Decoding a legacy `config.json` that still contains a `decisionTimeoutSeconds` field SHALL succeed (the field is ignored, not required), so older configs remain loadable.
@@ -30,17 +28,3 @@ Define the UI-independent application configuration model and its on-disk store.
 
 - **WHEN** a legacy `config.json` containing a `decisionTimeoutSeconds` field is decoded
 - **THEN** decoding succeeds and no decision is bounded by that value (the field has no runtime effect)
-
-### Requirement: ConfigStore read/write with defaults
-
-`ConfigStore` SHALL read and write `config.json` under `~/Library/Application Support/VibePet/`, and SHALL return a well-defined default configuration when the file does not exist.
-
-#### Scenario: Missing file yields default config
-
-- **WHEN** `ConfigStore` reads with no `config.json` present
-- **THEN** it returns the default `AppConfig` without throwing
-
-#### Scenario: Write then read round-trips
-
-- **WHEN** a config is written via `ConfigStore` and then read back
-- **THEN** the read value equals the written value

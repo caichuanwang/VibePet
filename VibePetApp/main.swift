@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startBridge() {
         let host = BridgeServerHost(
             petController: petController,
+            localizerProvider: { [weak self] in self?.currentLocalizer() ?? AppLocalizer(language: .simplifiedChinese) },
             onSessionStateChange: { [weak self] state in
                 self?.statusItemController?.rebuild()
                 self?.dashboardWindowController?.update(
@@ -83,7 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return SessionMenuSummary(activeCount: 0, attentionCount: 0)
                 }
                 return SessionMenuSummary.derive(from: state)
-            }
+            },
+            localizerProvider: { [weak self] in self?.currentLocalizer() ?? AppLocalizer(language: .simplifiedChinese) }
         )
     }
 
@@ -120,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // PetController is the single source of truth for sprite + state; the
         // surface renders into this window.
         petWindowSurface.bind(windowController: controller)
+        petWindowSurface.updateLocalizer(AppLocalizer(language: config.language))
         petWindowSurface.setPetVisible(true)
         petController.setActiveAsset(activeAsset(config: config))
         if greet {
@@ -129,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshPet() {
         let config = (try? configStore.read()) ?? .default
+        petWindowSurface.updateLocalizer(AppLocalizer(language: config.language))
         guard petWindowController != nil else {
             showPet(config: config, greet: false)
             return
@@ -201,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cardProvider: { [weak self] sessionID in
                 self?.petController.dashboardCard(for: sessionID)
             },
+            localizer: currentLocalizer(),
             onJump: { target in
                 try? TerminalJumpService().jump(to: target)
             },
@@ -222,11 +227,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Onboarding
 
     private func presentOnboarding() {
+        let localizer = currentLocalizer()
         let viewModel = PetImportViewModel()
-        let flow = OnboardingFlow(importViewModel: viewModel, hooks: HookInstallCoordinator()) { [weak self] in
+        let flow = OnboardingFlow(importViewModel: viewModel, hooks: HookInstallCoordinator(), localizer: localizer) { [weak self] in
             self?.finishOnboarding()
         }
-        let window = makeHostingWindow(title: "欢迎使用 VibePet", view: flow)
+        let window = makeHostingWindow(title: localizer.text(.onboardingWindowTitle), view: flow)
         onboardingWindow = window
         window.makeKeyAndOrderFront(nil)
     }
@@ -243,13 +249,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Import
 
     private func presentImport() {
+        let localizer = currentLocalizer()
         let viewModel = PetImportViewModel()
         viewModel.onPlaced = { [weak self] _ in
             self?.importWindow?.close()
             self?.importWindow = nil
             self?.refreshPet()
         }
-        let window = makeHostingWindow(title: "导入宠物", view: PetImportPanel(viewModel: viewModel))
+        let window = makeHostingWindow(title: localizer.text(.importWindowTitle), view: PetImportPanel(viewModel: viewModel, localizer: localizer))
         importWindow = window
         window.makeKeyAndOrderFront(nil)
     }
@@ -258,11 +265,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func presentSettings() {
         if let settingsWindow {
+            settingsWindow.title = currentLocalizer().text(.settingsWindowTitle)
             settingsWindow.makeKeyAndOrderFront(nil)
             return
         }
+        let localizer = currentLocalizer()
         let view = SettingsView(hooks: HookInstallCoordinator(), configStore: configStore)
-        let window = makeHostingWindow(title: "VibePet 设置", view: view)
+        let window = makeHostingWindow(title: localizer.text(.settingsWindowTitle), view: view)
         settingsWindow = window
         window.makeKeyAndOrderFront(nil)
     }
@@ -273,9 +282,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let current = try configStore.read()
             try configStore.write(transform(current))
+            statusItemController?.rebuild()
+            settingsWindow?.title = currentLocalizer().text(.settingsWindowTitle)
         } catch {
             NSLog("VibePet failed to update config: \(error)")
         }
+    }
+
+    private func currentConfig() -> AppConfig {
+        (try? configStore.read()) ?? .default
+    }
+
+    private func currentLocalizer() -> AppLocalizer {
+        AppLocalizer(language: currentConfig().language)
     }
 
     private func makeHostingWindow<V: View>(title: String, view: V) -> NSWindow {

@@ -228,6 +228,48 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-prompt"]?.summary, "User prompt: Make the dashboard denser")
     }
 
+    func testLifecycleActivityUpdatesStateWithoutNotificationBubble() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        host.applyForTesting(codexSessionStartEnvelope(sessionID: "codex-activity").agentEvent!)
+        try await BridgeClient(socketPath: socketPath).sendOneWay(lifecycleActivityEnvelope())
+
+        try await waitUntil {
+            host.sessionStateSnapshot.sessionsByID["codex-activity"]?.summary == "Codex PreToolUse: Bash"
+        }
+        XCTAssertTrue(surface.presentedBubbles.isEmpty)
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-activity"]?.phase, .running)
+    }
+
+    func testSessionCompletedUpdatesStateWithoutNotificationBubble() async throws {
+        let root = try TemporaryDirectory()
+        let socketPath = SocketPath(applicationSupportRoot: root.url)
+        let surface = FakePetSurface()
+        let controller = PetController(surface: surface, greetDuration: 10)
+        let host = BridgeServerHost(petController: controller, socketPath: socketPath)
+
+        host.start()
+        defer { host.stop() }
+        try await waitUntil { BridgeSocketIO.canConnect(to: socketPath.socketURL.path) }
+
+        host.applyForTesting(codexSessionStartEnvelope(sessionID: "codex-complete").agentEvent!)
+        try await BridgeClient(socketPath: socketPath).sendOneWay(codexThreadCompletionEnvelope(sessionID: "codex-complete"))
+
+        try await waitUntil {
+            host.sessionStateSnapshot.sessionsByID["codex-complete"]?.phase == .completed
+        }
+        XCTAssertTrue(surface.presentedBubbles.isEmpty)
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["codex-complete"]?.summary, "Done by notify")
+    }
+
     // MARK: - Approval (decide) — M4-5 / M4-6
 
     func testApprovalEntersDecideAndPresentsCard() async throws {
@@ -977,6 +1019,25 @@ final class NotificationBubbleFlowTests: XCTestCase {
                 sessionID: "codex-prompt",
                 timestamp: Date(),
                 summary: "User prompt: Make the dashboard denser"
+            )
+        )
+    }
+
+    private func lifecycleActivityEnvelope() -> BridgeEnvelope {
+        BridgeEnvelope(
+            requestId: UUID(),
+            source: SourceInfo(
+                tool: .codex,
+                projectName: "VibePet",
+                sessionID: "codex-activity",
+                sessionShortId: "codex-",
+                cwd: "/tmp/VibePet"
+            ),
+            content: .status(StatusContent(text: "Codex PreToolUse: Bash")),
+            agentEvent: .activityUpdated(
+                sessionID: "codex-activity",
+                timestamp: Date(),
+                summary: "Codex PreToolUse: Bash"
             )
         )
     }

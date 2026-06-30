@@ -86,7 +86,15 @@ final class SessionDashboardProjectionTests: XCTestCase {
 
         XCTAssertEqual(projection.rows.first?.latestUserPrompt, "Make the dashboard denser")
         XCTAssertNil(projection.rows.first?.detailSummary)
-        XCTAssertEqual(projection.rows.first?.emptyDetailSummary, "Waiting for agent output...")
+        XCTAssertEqual(projection.rows.first?.emptyDetailSummary, "等待 Agent 输出…")
+
+        let englishProjection = SessionDashboardProjection(
+            state: state,
+            activePetName: "Pixel",
+            now: now,
+            localizer: AppLocalizer(language: .english)
+        )
+        XCTAssertEqual(englishProjection.rows.first?.emptyDetailSummary, "Waiting for agent output...")
     }
 
     func testProjectionHidesDiscoveredPlaceholderSummaryFromDetail() {

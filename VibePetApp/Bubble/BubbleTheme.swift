@@ -57,11 +57,11 @@ enum BubbleTheme {
         }
     }
 
-    static func riskLabel(_ risk: RiskLevel) -> String {
+    static func riskLabel(_ risk: RiskLevel, localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)) -> String {
         switch risk {
-        case .high: "高风险"
-        case .medium: "中风险"
-        case .low: "低风险"
+        case .high: localizer.text(.riskHigh)
+        case .medium: localizer.text(.riskMedium)
+        case .low: localizer.text(.riskLow)
         }
     }
 

@@ -7,7 +7,8 @@ final class AppConfigWithTests: XCTestCase {
         enabledTools: [.claudeCode],
         activeGeneratorID: "local-cutout",
         petPosition: PetPosition(x: 1, y: 2, screenWidth: 800, screenHeight: 600),
-        hasCompletedOnboarding: false
+        hasCompletedOnboarding: false,
+        language: .simplifiedChinese
     )
 
     func testWithOverridesOnlyGivenField() {
@@ -18,6 +19,11 @@ final class AppConfigWithTests: XCTestCase {
         XCTAssertEqual(updated.enabledTools, base.enabledTools)
         XCTAssertEqual(updated.activeGeneratorID, base.activeGeneratorID)
         XCTAssertEqual(updated.petPosition, base.petPosition)
+        XCTAssertEqual(updated.language, base.language)
+    }
+
+    func testWithSetsLanguage() {
+        XCTAssertEqual(base.with(language: .english).language, .english)
     }
 
     func testWithSetsActivePetID() {

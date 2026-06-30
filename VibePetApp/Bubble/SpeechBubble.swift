@@ -29,6 +29,7 @@ struct SpeechBubble: View {
     var tailEdge: TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
     var autoDismiss = true
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
     var onJump: (JumpTarget) -> Void = { _ in }
     var onDismiss: () -> Void = {}
 
@@ -199,9 +200,9 @@ struct SpeechBubble: View {
 
     private var statusTitle: String {
         switch content {
-        case .status: "运行中"
-        case let .completion(completion): completion.isError ? "错误" : "完成"
-        case .approval, .question: "运行中"
+        case .status: localizer.text(.bubbleRunning)
+        case let .completion(completion): completion.isError ? localizer.text(.bubbleError) : localizer.text(.bubbleCompleted)
+        case .approval, .question: localizer.text(.bubbleRunning)
         }
     }
 

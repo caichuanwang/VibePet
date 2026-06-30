@@ -8,6 +8,10 @@ final class SessionDashboardWindowController: NSWindowController, NSWindowDelega
 
     private let model: SessionDashboardModel
     private let hostingController: NSHostingController<SessionDashboardView>
+    private let cardProvider: (String) -> SessionDashboardCard?
+    private let onJump: (JumpTarget) -> Void
+    private let onSelectedSessionChanged: (String?, JumpTarget?) -> Void
+    private var localizer: AppLocalizer
     private var mouseMonitors: [Any] = []
     var onClose: () -> Void = {}
 
@@ -17,15 +21,21 @@ final class SessionDashboardWindowController: NSWindowController, NSWindowDelega
         petFrame: CGRect,
         visibleFrame: CGRect,
         cardProvider: @escaping (String) -> SessionDashboardCard?,
+        localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese),
         onJump: @escaping (JumpTarget) -> Void = { _ in },
         onSelectedSessionChanged: @escaping (String?, JumpTarget?) -> Void
     ) {
         model = SessionDashboardModel(state: state, activePetName: activePetName)
+        self.cardProvider = cardProvider
+        self.onJump = onJump
+        self.onSelectedSessionChanged = onSelectedSessionChanged
+        self.localizer = localizer
         let view = SessionDashboardView(
             model: model,
             cardProvider: cardProvider,
             onJump: onJump,
-            onSelectedSessionChanged: onSelectedSessionChanged
+            onSelectedSessionChanged: onSelectedSessionChanged,
+            localizer: localizer
         )
         hostingController = NSHostingController(rootView: view)
 
@@ -78,6 +88,18 @@ final class SessionDashboardWindowController: NSWindowController, NSWindowDelega
     }
 
     func refreshContent() {
+        model.refreshContent()
+    }
+
+    func updateLocalizer(_ localizer: AppLocalizer) {
+        self.localizer = localizer
+        hostingController.rootView = SessionDashboardView(
+            model: model,
+            cardProvider: cardProvider,
+            onJump: onJump,
+            onSelectedSessionChanged: onSelectedSessionChanged,
+            localizer: localizer
+        )
         model.refreshContent()
     }
 

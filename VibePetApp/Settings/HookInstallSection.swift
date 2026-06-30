@@ -7,6 +7,7 @@ import VibePetCore
 struct HookInstallSection: View {
     @ObservedObject var coordinator: HookInstallCoordinator
     var detectedOnly: Bool = false
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
 
     private var visibleRows: [ToolInstallStatus] {
         detectedOnly ? coordinator.rows.filter(\.detected) : coordinator.rows
@@ -15,9 +16,7 @@ struct HookInstallSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if visibleRows.isEmpty {
-                Text(detectedOnly
-                    ? "未检测到 Claude Code 或 Codex —— 之后可在设置里安装提醒 hooks。"
-                    : "未检测到支持的工具（Claude Code / Codex）。")
+                Text(localizer.text(detectedOnly ? .noDetectedToolsOnboarding : .noDetectedToolsSettings))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
@@ -40,21 +39,21 @@ struct HookInstallSection: View {
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(row.tool.displayName).font(.callout.weight(.semibold))
-                    Text(row.status.label).font(.caption).foregroundStyle(.secondary)
+                    Text(row.status.localizedLabel(localizer)).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if row.status == .notInstalled {
-                    Button("安装") { coordinator.install(row.tool) }
+                    Button(localizer.text(.install)) { coordinator.install(row.tool) }
                 } else {
-                    Button("卸载") { coordinator.uninstall(row.tool) }
+                    Button(localizer.text(.uninstall)) { coordinator.uninstall(row.tool) }
                     if row.status == .outdated {
-                        Button("更新") { coordinator.install(row.tool) }
+                        Button(localizer.text(.update)) { coordinator.install(row.tool) }
                     }
                 }
             }
             // Codex `/hooks` trust guidance (and any other status notice).
             if let notice = coordinator.notice(for: row) {
-                Text(notice.suggestedAction ?? notice.message)
+                Text(localizedNotice(notice))
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
@@ -72,20 +71,28 @@ struct HookInstallSection: View {
     private func diagnostics(_ report: HookHealthReport, tool: ToolKind) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             ForEach(Array(report.errors.enumerated()), id: \.offset) { _, issue in
-                Label(issue.zhLabel, systemImage: "exclamationmark.triangle.fill")
+                Label(issue.localizedLabel(localizer), systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2)
                     .foregroundStyle(BubbleTheme.errorAccent)
             }
             ForEach(Array(report.notices.enumerated()), id: \.offset) { _, issue in
-                Label(issue.zhLabel, systemImage: "info.circle")
+                Label(issue.localizedLabel(localizer), systemImage: "info.circle")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
             if !report.repairableIssues.isEmpty {
-                Button("修复") { coordinator.repair(tool) }
+                Button(localizer.text(.repair)) { coordinator.repair(tool) }
                     .controlSize(.small)
             }
         }
         .padding(.top, 2)
+    }
+
+    private func localizedNotice(_ notice: PresentedError) -> String {
+        let text = notice.suggestedAction ?? notice.message
+        if text.contains("Codex"), text.contains("/hooks") {
+            return localizer.text(.codexTrustGuidance)
+        }
+        return text
     }
 }

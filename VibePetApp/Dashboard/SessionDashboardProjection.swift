@@ -29,7 +29,12 @@ struct SessionDashboardProjection: Equatable {
     let attentionCount: Int
     let emptyPetName: String
 
-    init(state: SessionState, activePetName: String, now: Date = .now) {
+    init(
+        state: SessionState,
+        activePetName: String,
+        now: Date = .now,
+        localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
+    ) {
         rows = state.visibleSessions
             .sorted(by: Self.rowPrecedes)
             .map { session in
@@ -43,7 +48,7 @@ struct SessionDashboardProjection: Equatable {
                 summary: session.summary,
                 latestUserPrompt: session.latestUserPrompt,
                 detailSummary: Self.detailSummary(for: session),
-                emptyDetailSummary: Self.emptyDetailSummary(for: session)
+                emptyDetailSummary: Self.emptyDetailSummary(for: session, localizer: localizer)
             )
         }
         totalCount = state.visibleSessions.count
@@ -127,16 +132,19 @@ struct SessionDashboardProjection: Equatable {
         return summary
     }
 
-    static func emptyDetailSummary(for session: AgentSession) -> String {
+    static func emptyDetailSummary(
+        for session: AgentSession,
+        localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
+    ) -> String {
         switch session.phase {
         case .running:
-            return "Waiting for agent output..."
+            return localizer.text(.sessionWaitingForOutput)
         case .waitingForApproval:
-            return "Waiting for approval..."
+            return localizer.text(.sessionWaitingForApproval)
         case .waitingForAnswer:
-            return "Waiting for your answer..."
+            return localizer.text(.sessionWaitingForAnswer)
         case .completed:
-            return session.isError ? "Session ended with an error." : "Session completed."
+            return session.isError ? localizer.text(.sessionEndedWithError) : localizer.text(.sessionCompleted)
         }
     }
 

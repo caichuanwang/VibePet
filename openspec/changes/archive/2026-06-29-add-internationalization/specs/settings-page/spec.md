@@ -1,34 +1,4 @@
-# settings-page Specification
-
-## Purpose
-
-Define the app settings page: per-tool hook enablement and install controls, runtime preferences, and pet switching/import.
-
-## Requirements
-
-### Requirement: Settings page exposes tool enablement and install controls
-
-`VibePetApp` SHALL provide a settings page that lets the user enable tools (Claude Code / Codex) and trigger one-click install/uninstall of hooks via `VibePetSetup`. For each tool it SHALL display the installation state, binary version, and trust state derived from the install manifest/status. When Codex is `installedNeedsTrust`, or when the managed Codex hook set has changed and requires a reinstall, the page SHALL show readable `/hooks` trust or reinstall guidance.
-
-#### Scenario: Per-tool install state is displayed
-
-- **WHEN** the settings page opens
-- **THEN** each tool shows its install state, binary version, and trust state from `VibePetSetup status`
-
-#### Scenario: One-click install/uninstall
-
-- **WHEN** the user clicks install or uninstall for a tool
-- **THEN** the corresponding `VibePetSetup` action runs and the displayed state refreshes
-
-#### Scenario: Codex needs-trust shows /hooks guidance
-
-- **WHEN** Codex is in `installedNeedsTrust`
-- **THEN** the page shows guidance to confirm the hook in Codex `/hooks`
-
-#### Scenario: Managed hook drift prompts reinstall
-
-- **WHEN** a previously installed tool is missing a managed hook entry required by the current app version
-- **THEN** the page shows readable guidance that the managed hooks changed and a reinstall/repair is needed
+## MODIFIED Requirements
 
 ### Requirement: Settings page exposes runtime preferences
 

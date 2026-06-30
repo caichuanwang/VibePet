@@ -11,10 +11,13 @@ struct SettingsView: View {
     @State private var enabledClaude: Bool
     @State private var enabledCodex: Bool
     @State private var launchAtLogin: Bool
+    @State private var selectedLanguage: AppLanguage
     @State private var pets: [PetAsset] = []
     @State private var selectedPetSlug: String
     @StateObject private var importViewModel = PetImportViewModel()
     private let assetStore = PetAssetStore()
+
+    private var localizer: AppLocalizer { AppLocalizer(language: selectedLanguage) }
 
     init(hooks: HookInstallCoordinator, configStore: ConfigStore) {
         self.hooks = hooks
@@ -23,33 +26,45 @@ struct SettingsView: View {
         _enabledClaude = State(initialValue: config.enabledTools.contains(.claudeCode))
         _enabledCodex = State(initialValue: config.enabledTools.contains(.codex))
         _launchAtLogin = State(initialValue: SMAppService.mainApp.status == .enabled)
+        _selectedLanguage = State(initialValue: SettingsLanguageModel(config: config).selectedLanguage)
         _selectedPetSlug = State(initialValue: config.activePetID ?? "")
     }
 
     var body: some View {
         Form {
-            Section("启用工具") {
+            Section(localizer.text(.toolsSection)) {
                 Toggle("Claude Code", isOn: $enabledClaude).onChange(of: enabledClaude) { _, _ in persistTools() }
                 Toggle("Codex", isOn: $enabledCodex).onChange(of: enabledCodex) { _, _ in persistTools() }
             }
 
-            Section("提醒 Hooks") {
-                HookInstallSection(coordinator: hooks)
+            Section(localizer.text(.hooksSection)) {
+                HookInstallSection(coordinator: hooks, localizer: localizer)
             }
 
-            Section("行为") {
-                Toggle("开机自启", isOn: $launchAtLogin).onChange(of: launchAtLogin) { _, newValue in
+            Section(localizer.text(.behaviorSection)) {
+                Toggle(localizer.text(.launchAtLogin), isOn: $launchAtLogin).onChange(of: launchAtLogin) { _, newValue in
                     setLaunchAtLogin(newValue)
                 }
             }
 
-            Section("宠物") {
+            Section(localizer.text(.languageSection)) {
+                Picker(localizer.text(.languagePicker), selection: $selectedLanguage) {
+                    ForEach(AppLanguage.allCases, id: \.self) { language in
+                        Text(localizer.languageDisplayName(language)).tag(language)
+                    }
+                }
+                .onChange(of: selectedLanguage) { _, newValue in
+                    update { SettingsLanguageModel(config: $0).configAfterSelecting(newValue, from: $0) }
+                }
+            }
+
+            Section(localizer.text(.petSection)) {
                 if pets.isEmpty {
-                    Text("还没有可用宠物。可把宠物装进 ~/.codex/pets/，或在下方导入。")
+                    Text(localizer.text(.noPetsSettingsHint))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Picker("切换宠物", selection: $selectedPetSlug) {
+                    Picker(localizer.text(.switchPet), selection: $selectedPetSlug) {
                         ForEach(pets) { pet in
                             Text(pet.displayName).tag(pet.slug)
                         }
@@ -62,13 +77,13 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Button("导入宠物…") {
+                Button(localizer.text(.importPet)) {
                     importViewModel.choosePackage()
                 }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 520)
+        .frame(width: 420, height: 560)
         .onAppear {
             hooks.refresh()
             refreshPets()

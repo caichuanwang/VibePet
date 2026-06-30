@@ -115,6 +115,7 @@ struct ApprovalCard: View {
     let source: SourceInfo
     var tailEdge: SpeechBubble.TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
     var onJump: (JumpTarget) -> Void = { _ in }
     var onDecision: (BridgeResponse) -> Void = { _ in }
 
@@ -127,6 +128,7 @@ struct ApprovalCard: View {
         tailEdge: SpeechBubble.TailEdge = .bottom,
         tailOffsetX: CGFloat = 40,
         presentation: ApprovalPresentation,
+        localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese),
         onJump: @escaping (JumpTarget) -> Void = { _ in },
         onDecision: @escaping (BridgeResponse) -> Void = { _ in }
     ) {
@@ -135,6 +137,7 @@ struct ApprovalCard: View {
         self.tailEdge = tailEdge
         self.tailOffsetX = tailOffsetX
         self.presentation = presentation
+        self.localizer = localizer
         self.onJump = onJump
         self.onDecision = onDecision
     }
@@ -166,7 +169,7 @@ struct ApprovalCard: View {
         }
         .onAppear { focus = content.risk == .high ? .deny : .allow }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(sourceLabel)：\(content.title)，\(BubbleTheme.riskLabel(content.risk))")
+        .accessibilityLabel("\(sourceLabel): \(content.title), \(BubbleTheme.riskLabel(content.risk, localizer: localizer))")
     }
 
     // MARK: - Header
@@ -218,7 +221,7 @@ struct ApprovalCard: View {
     private var statusChip: some View {
         HStack(spacing: 6) {
             Circle().fill(BubbleTheme.accentOrange).frame(width: 7, height: 7)
-            Text("待审批")
+            Text(localizer.text(.approvalPending))
         }
         .font(.caption)
         .padding(.horizontal, 8)
@@ -265,7 +268,7 @@ struct ApprovalCard: View {
                     .foregroundStyle(BubbleTheme.bodyText)
                     .lineLimit(2)
                 Spacer(minLength: 8)
-                Text(BubbleTheme.riskLabel(content.risk))
+                Text(BubbleTheme.riskLabel(content.risk, localizer: localizer))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(BubbleTheme.riskTextColor(content.risk))
                     .fixedSize()
@@ -350,9 +353,9 @@ struct ApprovalCard: View {
         case .decision:
             BubbleFooter {
                 if source.jumpTarget != nil {
-                    Button("回终端") { handleBackToTerminal() }
+                    Button(localizer.text(.backToTerminal)) { handleBackToTerminal() }
                         .buttonStyle(BubbleActionButtonStyle(variant: .neutral))
-                        .accessibilityLabel("回终端")
+                        .accessibilityLabel(localizer.text(.backToTerminal))
                 }
             } trailing: {
                 pendingLabel
@@ -368,16 +371,16 @@ struct ApprovalCard: View {
     /// jump-back to the terminal is v1.1).
     private var terminalFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("此请求需在终端继续处理")
+            Text(localizer.text(.approvalTerminalRequired))
                 .font(.caption)
                 .foregroundStyle(BubbleTheme.mutedText)
             HStack(spacing: BubbleTheme.footerButtonSpacing) {
                 pendingLabel
                 Spacer(minLength: 8)
-                Button("回终端处理") { handleInTerminal() }
+                Button(localizer.text(.handleInTerminal)) { handleInTerminal() }
                     .buttonStyle(BubbleActionButtonStyle(variant: .primary))
                     .keyboardShortcut(.defaultAction)
-                    .accessibilityLabel("回终端处理")
+                    .accessibilityLabel(localizer.text(.handleInTerminal))
             }
         }
     }
@@ -409,7 +412,7 @@ struct ApprovalCard: View {
     @ViewBuilder
     private var pendingLabel: some View {
         if presentation.pendingCount > 0 {
-            Text("还有 \(presentation.pendingCount) 个待处理")
+            Text(localizer.text(.pendingCount, presentation.pendingCount))
                 .font(.caption2)
                 .foregroundStyle(BubbleTheme.mutedText)
         }

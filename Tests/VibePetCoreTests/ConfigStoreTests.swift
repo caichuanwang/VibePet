@@ -19,7 +19,8 @@ final class ConfigStoreTests: XCTestCase {
             enabledTools: [.claudeCode, .codex],
             activeGeneratorID: "remote-cutout",
             petPosition: PetPosition(x: 144, y: 288, screenWidth: 1728, screenHeight: 1117),
-            hasCompletedOnboarding: true
+            hasCompletedOnboarding: true,
+            language: .english
         )
 
         try store.write(config)
@@ -33,13 +34,15 @@ final class ConfigStoreTests: XCTestCase {
             enabledTools: [.codex],
             activeGeneratorID: "local-cutout",
             petPosition: PetPosition(x: 24, y: 48, screenWidth: 1440, screenHeight: 900),
-            hasCompletedOnboarding: true
+            hasCompletedOnboarding: true,
+            language: .english
         )
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         XCTAssertEqual(decoded, config)
         XCTAssertTrue(decoded.hasCompletedOnboarding)
+        XCTAssertEqual(decoded.language, .english)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertNil(object["decisionTimeoutSeconds"], "AppConfig should not write the removed App-side timeout")
     }
@@ -63,6 +66,27 @@ final class ConfigStoreTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         XCTAssertFalse(decoded.hasCompletedOnboarding)
+    }
+
+    func testLegacyAppConfigMissingLanguageDecodesAsSimplifiedChinese() throws {
+        let data = """
+        {
+          "activeGeneratorID": "local-cutout",
+          "activePetID": "pet-1",
+          "enabledTools": ["codex"],
+          "hasCompletedOnboarding": true,
+          "petPosition": {
+            "screenHeight": 900,
+            "screenWidth": 1440,
+            "x": 24,
+            "y": 48
+          }
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        XCTAssertEqual(decoded.language, .simplifiedChinese)
     }
 
     func testLegacyDecisionTimeoutFieldIsIgnoredOnDecode() throws {
@@ -91,6 +115,10 @@ final class ConfigStoreTests: XCTestCase {
 
     func testDefaultConfigHasNotCompletedOnboarding() {
         XCTAssertFalse(AppConfig.default.hasCompletedOnboarding)
+    }
+
+    func testDefaultConfigUsesSimplifiedChinese() {
+        XCTAssertEqual(AppConfig.default.language, .simplifiedChinese)
     }
 
     func testConfigFileLivesUnderVibePetSupportDirectory() {

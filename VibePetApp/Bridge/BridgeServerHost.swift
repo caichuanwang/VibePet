@@ -23,6 +23,7 @@ final class BridgeServerHost {
     private let activeSessionProvider: @Sendable () async -> [ActiveAgentSession]
     private let livenessInterval: TimeInterval
     private let terminalJumpResolver: TerminalJumpTargetResolver
+    private let localizerProvider: @MainActor () -> AppLocalizer
     private let onSessionStateChange: @MainActor (SessionState) -> Void
     private var sessionState = SessionState()
     private var server: BridgeServer?
@@ -55,6 +56,7 @@ final class BridgeServerHost {
         },
         livenessInterval: TimeInterval = 5,
         terminalJumpResolver: TerminalJumpTargetResolver = TerminalJumpTargetResolver(),
+        localizerProvider: @escaping @MainActor () -> AppLocalizer = { AppLocalizer(language: .simplifiedChinese) },
         onSessionStateChange: @escaping @MainActor (SessionState) -> Void = { _ in }
     ) {
         self.petController = petController
@@ -65,6 +67,7 @@ final class BridgeServerHost {
         self.activeSessionProvider = activeSessionProvider
         self.livenessInterval = livenessInterval
         self.terminalJumpResolver = terminalJumpResolver
+        self.localizerProvider = localizerProvider
         self.onSessionStateChange = onSessionStateChange
     }
 
@@ -290,7 +293,7 @@ final class BridgeServerHost {
             sessionState.apply(.actionableStateResolved(
                 sessionID: envelope.source.sessionID,
                 timestamp: .now,
-                summary: "Handled in terminal"
+                summary: localizerProvider().text(.handledInTerminal)
             ))
         }
         publishSessionState()
@@ -320,12 +323,10 @@ final class BridgeServerHost {
             return true
         }
         switch event {
-        case .sessionStarted:
-            return false
-        case let .activityUpdated(_, _, summary):
-            return !SessionState.isUserPromptSummary(summary)
-        case .permissionRequested, .questionAsked, .sessionCompleted, .jumpTargetUpdated, .actionableStateResolved:
+        case .permissionRequested, .questionAsked:
             return true
+        case .sessionStarted, .activityUpdated, .sessionCompleted, .jumpTargetUpdated, .actionableStateResolved:
+            return false
         }
     }
 
@@ -349,7 +350,7 @@ final class BridgeServerHost {
             timestamp: .now,
             title: envelope.source.projectName ?? toolTitle(envelope.source.tool),
             tool: envelope.source.tool,
-            summary: "Session started",
+            summary: localizerProvider().text(.sessionStarted),
             jumpTarget: envelope.source.jumpTarget
         ))
     }

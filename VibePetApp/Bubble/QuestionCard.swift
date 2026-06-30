@@ -57,6 +57,7 @@ struct QuestionCard: View {
     let conversationContext: QuestionConversationContext?
     var tailEdge: SpeechBubble.TailEdge = .bottom
     var tailOffsetX: CGFloat = 40
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
     var onJump: (JumpTarget) -> Void = { _ in }
     var onAnswer: (BridgeResponse) -> Void = { _ in }
 
@@ -202,6 +203,7 @@ struct QuestionCard: View {
         tailEdge: SpeechBubble.TailEdge = .bottom,
         tailOffsetX: CGFloat = 40,
         presentation: ApprovalPresentation,
+        localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese),
         onJump: @escaping (JumpTarget) -> Void = { _ in },
         onAnswer: @escaping (BridgeResponse) -> Void = { _ in }
     ) {
@@ -211,6 +213,7 @@ struct QuestionCard: View {
         self.tailEdge = tailEdge
         self.tailOffsetX = tailOffsetX
         self.presentation = presentation
+        self.localizer = localizer
         self.onJump = onJump
         self.onAnswer = onAnswer
     }
@@ -271,7 +274,7 @@ struct QuestionCard: View {
             Self.jumpBack(from: source, onJump: onJump)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(sourceLabel)：\(content.title)")
+        .accessibilityLabel("\(sourceLabel): \(content.title)")
     }
 
     // MARK: - Header (source identity + status chip)
@@ -337,7 +340,7 @@ struct QuestionCard: View {
     }
 
     private var statusChipTitle: String {
-        isMultiQuestion ? "Questions · \(content.questions.count)" : "Question"
+        isMultiQuestion ? localizer.text(.questionMultiTitle, content.questions.count) : localizer.text(.questionSingleTitle)
     }
 
     private var toolName: String {
@@ -375,7 +378,7 @@ struct QuestionCard: View {
         if let conversationContext {
             VStack(alignment: .leading, spacing: 6) {
                 if let latestUserPrompt = conversationContext.latestUserPrompt {
-                    turnRow(speaker: "用户", text: latestUserPrompt)
+                    turnRow(speaker: localizer.text(.questionUserSpeaker), text: latestUserPrompt)
                 }
                 if let agentSummary = conversationContext.agentSummary {
                     turnRow(speaker: "Agent", text: agentSummary)
@@ -398,7 +401,7 @@ struct QuestionCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(speaker)：\(text)")
+        .accessibilityLabel("\(speaker): \(text)")
     }
 
     // MARK: - Question block (single page or paged item)
@@ -467,10 +470,10 @@ struct QuestionCard: View {
     private var pagerHeader: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("问题 \(paging.currentIndex + 1) / \(content.questions.count)")
+                Text(localizer.text(.questionIndex, paging.currentIndex + 1, content.questions.count))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.white.opacity(0.72))
-                    .accessibilityLabel("问题 \(paging.currentIndex + 1)，共 \(content.questions.count) 题")
+                    .accessibilityLabel(localizer.text(.questionIndexAccessibility, paging.currentIndex + 1, content.questions.count))
                 if !currentKindLabel.isEmpty {
                     Text(currentKindLabel)
                         .font(BubbleTheme.headerFont)
@@ -479,9 +482,9 @@ struct QuestionCard: View {
             }
             Spacer(minLength: 8)
             HStack(spacing: 6) {
-                pagerButton(systemName: "chevron.left", enabled: paging.canGoPrevious, label: "上一题", action: goPrevious)
+                pagerButton(systemName: "chevron.left", enabled: paging.canGoPrevious, label: localizer.text(.previousQuestion), action: goPrevious)
                 progressDots
-                pagerButton(systemName: "chevron.right", enabled: paging.canGoNext, label: "下一题", action: goNext)
+                pagerButton(systemName: "chevron.right", enabled: paging.canGoNext, label: localizer.text(.nextQuestion), action: goNext)
             }
         }
     }
@@ -531,10 +534,10 @@ struct QuestionCard: View {
     private var currentKindLabel: String {
         guard let item = currentQuestion else { return "" }
         var parts: [String] = []
-        if paging.showsSubmit {
-            parts.append("最后一题")
+        if paging.currentIndex == content.questions.count - 1 {
+            parts.append(localizer.text(.lastQuestion))
         }
-        parts.append(item.multiSelect ? "多选" : "单选")
+        parts.append(item.multiSelect ? localizer.text(.multiSelect) : localizer.text(.singleSelect))
         return parts.joined(separator: " · ")
     }
 
@@ -575,7 +578,7 @@ struct QuestionCard: View {
             }
             return option.label
         }
-        let joined = values.joined(separator: "、")
+        let joined = values.joined(separator: localizer.language == .simplifiedChinese ? "、" : ", ")
         return joined.count > 14 ? String(joined.prefix(14)) + "…" : joined
     }
 
@@ -644,10 +647,10 @@ struct QuestionCard: View {
 
     private func answerBox(for item: QuestionItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("我的回答")
+            Text(localizer.text(.customAnswerLabel))
                 .font(BubbleTheme.headerFont)
                 .foregroundStyle(BubbleTheme.mutedText)
-            TextField("填写你的回答…", text: freeformBinding(for: item.header), axis: .vertical)
+            TextField(localizer.text(.customAnswerPlaceholder), text: freeformBinding(for: item.header), axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(BubbleTheme.bodyFont)
                 .foregroundStyle(BubbleTheme.bodyText)
@@ -656,7 +659,7 @@ struct QuestionCard: View {
                 .frame(minHeight: 60, alignment: .topLeading)
                 .background(BubbleTheme.fieldBackground, in: RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Self.accent.opacity(0.28), lineWidth: 1))
-                .accessibilityLabel("我的回答")
+                .accessibilityLabel(localizer.text(.customAnswerLabel))
         }
     }
 
@@ -693,16 +696,16 @@ struct QuestionCard: View {
     private var footer: some View {
         BubbleFooter {
             if source.jumpTarget != nil {
-                Button("回终端") { handleBackToTerminal() }
+                Button(localizer.text(.backToTerminal)) { handleBackToTerminal() }
                     .buttonStyle(BubbleActionButtonStyle(variant: .neutral))
-                    .accessibilityLabel("回终端")
+                    .accessibilityLabel(localizer.text(.backToTerminal))
             }
         } trailing: {
             pendingLabel
-            Button("稍后") { handleDeferLater() }
+            Button(localizer.text(.deferAnswer)) { handleDeferLater() }
                 .buttonStyle(BubbleActionButtonStyle(variant: .neutral))
-                .accessibilityLabel("稍后回答")
-                .accessibilityHint("交还终端原生流程")
+                .accessibilityLabel(localizer.text(.deferAnswer))
+                .accessibilityHint(localizer.text(.deferAnswerHint))
             footerPrimaryButton
         }
     }
@@ -715,18 +718,18 @@ struct QuestionCard: View {
                 .buttonStyle(BubbleActionButtonStyle(variant: .primary, isEnabled: paging.canSubmit))
                 .disabled(!paging.canSubmit)
                 .accessibilityLabel(submitTitle)
-                .accessibilityHint(paging.canSubmit ? "提交所有问题的答案" : "请先回答所有问题")
+                .accessibilityHint(paging.canSubmit ? localizer.text(.submitAnswersHint) : localizer.text(.answerRequired))
         } else {
-            Button("下一题") { goNext() }
+            Button(localizer.text(.nextQuestion)) { goNext() }
                 .buttonStyle(BubbleActionButtonStyle(variant: .primary, isEnabled: paging.canGoNext))
                 .disabled(!paging.canGoNext)
-                .accessibilityLabel("下一题")
-                .accessibilityHint(paging.canGoNext ? "进入下一题" : "请先回答当前问题")
+                .accessibilityLabel(localizer.text(.nextQuestion))
+                .accessibilityHint(paging.canGoNext ? localizer.text(.nextQuestion) : localizer.text(.answerCurrentQuestionHint))
         }
     }
 
     private var submitTitle: String {
-        isMultiQuestion ? "提交全部回答" : "提交回答"
+        isMultiQuestion ? localizer.text(.submitAllAnswers) : localizer.text(.submitAnswer)
     }
 
     /// A muted hint describing how many questions still need a valid answer.
@@ -746,9 +749,9 @@ struct QuestionCard: View {
             let remaining = content.questions.filter {
                 !Self.isQuestionComplete($0, selections: selections, freeformText: freeformText)
             }.count
-            return remaining == 0 ? "全部已回答，可提交" : "\(remaining) 个问题待回答"
+            return remaining == 0 ? localizer.text(.allAnsweredCanSubmit) : localizer.text(.remainingQuestions, remaining)
         }
-        return hasCompleteSelection ? nil : "需要回答后继续"
+        return hasCompleteSelection ? nil : localizer.text(.answerRequired)
     }
 
     /// Submit is enabled only when every question yields a usable value: at least

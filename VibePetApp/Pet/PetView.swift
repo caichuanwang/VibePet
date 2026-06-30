@@ -4,6 +4,7 @@ import VibePetCore
 struct PetView: View {
     let asset: PetAsset?
     var activity: PetActivity = .idle
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
     var onFrameChanged: ((CGImage?) -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -20,7 +21,7 @@ struct PetView: View {
                     onFrameChanged: onFrameChanged
                 )
             } else {
-                PlaceholderPet()
+                PlaceholderPet(localizer: localizer)
                     .onAppear { onFrameChanged?(Self.emptyHitFrame) }
             }
         }
@@ -144,11 +145,13 @@ private struct SpriteSheetAnimator: View {
 }
 
 private struct PlaceholderPet: View {
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
+
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: "pawprint.fill")
                 .font(.system(size: 36))
-            Text("选择宠物")
+            Text(localizer.text(.petPlaceholderChoosePet))
                 .font(.caption2)
         }
         .foregroundStyle(.secondary)

@@ -106,37 +106,41 @@ extension ToolKind {
 }
 
 extension InstallStatus {
-    var label: String {
+    var label: String { localizedLabel(AppLocalizer(language: .simplifiedChinese)) }
+
+    func localizedLabel(_ localizer: AppLocalizer) -> String {
         switch self {
-        case .notInstalled: "未安装"
-        case .installedNeedsTrust: "已写入，待信任"
-        case .enabled: "已启用"
-        case .outdated: "版本落后"
+        case .notInstalled: localizer.text(.statusNotInstalled)
+        case .installedNeedsTrust: localizer.text(.statusInstalledNeedsTrust)
+        case .enabled: localizer.text(.statusEnabled)
+        case .outdated: localizer.text(.statusOutdated)
         }
     }
 }
 
 extension HookHealthReport.Issue {
-    /// User-facing Chinese summary for the settings page (Core's `description` stays
-    /// technical English for the CLI/logs).
-    var zhLabel: String {
+    /// User-facing Chinese summary for compatibility with existing settings tests.
+    var zhLabel: String { localizedLabel(AppLocalizer(language: .simplifiedChinese)) }
+
+    func localizedLabel(_ localizer: AppLocalizer) -> String {
         switch self {
         case .binaryNotFound:
-            "Hook 程序缺失"
+            return localizer.text(.hookProgramMissing)
         case .binaryNotExecutable:
-            "Hook 程序无法执行"
+            return localizer.text(.hookProgramNotExecutable)
         case .configMalformedJSON:
-            "配置文件 JSON 损坏（需手动修复）"
+            return localizer.text(.hookConfigJSONBroken)
         case .staleCommandPath:
-            "配置指向的程序路径已失效"
+            return localizer.text(.hookConfiguredPathInvalid)
         case .managedHooksMissing:
-            "配置中缺少 VibePet 的 hook 条目"
+            return localizer.text(.hookEntryMissing)
         case .orphanedInstall:
-            "配置残留 VibePet hook，但安装记录已丢失"
+            return localizer.text(.hookManifestMissing)
         case .codexFeatureDisabled:
-            "Codex [features] hooks 开关被关闭"
+            return localizer.text(.codexHooksFeatureDisabled)
         case .otherHooksDetected(let names):
-            "检测到其它 hook 共存：\(names.joined(separator: "、"))"
+            let joined = names.joined(separator: localizer.language == .simplifiedChinese ? "、" : ", ")
+            return localizer.text(.hookCoexistenceDetected, joined)
         }
     }
 }

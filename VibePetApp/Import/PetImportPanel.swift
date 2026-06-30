@@ -4,6 +4,7 @@ import VibePetCore
 
 struct PetImportPanel: View {
     @ObservedObject var viewModel: PetImportViewModel
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
 
     var body: some View {
         VStack(spacing: 16) {
@@ -11,7 +12,7 @@ struct PetImportPanel: View {
             case .idle:
                 idleView
             case .importing:
-                ProgressView("正在导入宠物…")
+                ProgressView(localizer.text(.importInProgress))
                     .controlSize(.large)
             case let .imported(asset):
                 importedView(asset)
@@ -41,12 +42,12 @@ struct PetImportPanel: View {
             Image(systemName: "shippingbox.fill")
                 .font(.system(size: 36))
                 .foregroundStyle(Color.accentColor)
-            Text("导入 Codex 宠物").font(.headline)
-            Text("拖入包含 pet.json 和 spritesheet 的 zip 或文件夹。")
+            Text(localizer.text(.importTitle)).font(.headline)
+            Text(localizer.text(.importDescription))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("选择宠物…") {
+            Button(localizer.text(.choosePetFile)) {
                 viewModel.choosePackage()
             }
             .keyboardShortcut(.defaultAction)
@@ -60,10 +61,10 @@ struct PetImportPanel: View {
                 .font(.system(size: 36))
                 .foregroundStyle(.green)
             Text(asset.displayName).font(.headline)
-            Text("已设为当前宠物。")
+            Text(localizer.text(.importSetCurrentPet))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Button("再导入一个") {
+            Button(localizer.text(.importAnother)) {
                 viewModel.reset()
             }
         }
@@ -74,12 +75,12 @@ struct PetImportPanel: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 32))
                 .foregroundStyle(.orange)
-            Text("无法导入").font(.headline)
+            Text(localizer.text(.importFailureTitle)).font(.headline)
             Text(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("换一个文件…") {
+            Button(localizer.text(.chooseAnotherFile)) {
                 viewModel.choosePackage()
             }
         }

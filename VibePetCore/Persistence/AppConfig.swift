@@ -1,18 +1,25 @@
 import Foundation
 
+public enum AppLanguage: String, Codable, CaseIterable, Equatable, Sendable {
+    case simplifiedChinese = "zh-Hans"
+    case english = "en"
+}
+
 public struct AppConfig: Codable, Equatable, Sendable {
     public let activePetID: String?
     public let enabledTools: [ToolKind]
     public let activeGeneratorID: String
     public let petPosition: PetPosition
     public let hasCompletedOnboarding: Bool
+    public let language: AppLanguage
 
     public static let `default` = AppConfig(
         activePetID: nil,
         enabledTools: [.claudeCode, .codex],
         activeGeneratorID: "local-cutout",
         petPosition: PetPosition(x: 24, y: 24, screenWidth: 0, screenHeight: 0),
-        hasCompletedOnboarding: false
+        hasCompletedOnboarding: false,
+        language: .simplifiedChinese
     )
 
     private enum CodingKeys: String, CodingKey {
@@ -22,6 +29,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         case activeGeneratorID
         case petPosition
         case hasCompletedOnboarding
+        case language
     }
 
     public init(
@@ -29,13 +37,15 @@ public struct AppConfig: Codable, Equatable, Sendable {
         enabledTools: [ToolKind],
         activeGeneratorID: String,
         petPosition: PetPosition,
-        hasCompletedOnboarding: Bool = false
+        hasCompletedOnboarding: Bool = false,
+        language: AppLanguage = .simplifiedChinese
     ) {
         self.activePetID = activePetID
         self.enabledTools = enabledTools
         self.activeGeneratorID = activeGeneratorID
         self.petPosition = petPosition
         self.hasCompletedOnboarding = hasCompletedOnboarding
+        self.language = language
     }
 
     public init(from decoder: Decoder) throws {
@@ -46,6 +56,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         activeGeneratorID = try container.decode(String.self, forKey: .activeGeneratorID)
         petPosition = try container.decode(PetPosition.self, forKey: .petPosition)
         hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
+        language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .simplifiedChinese
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -55,6 +66,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
         try container.encode(activeGeneratorID, forKey: .activeGeneratorID)
         try container.encode(petPosition, forKey: .petPosition)
         try container.encode(hasCompletedOnboarding, forKey: .hasCompletedOnboarding)
+        try container.encode(language, forKey: .language)
     }
 
     /// Returns a copy with the given fields overridden; unspecified fields are
@@ -66,14 +78,16 @@ public struct AppConfig: Codable, Equatable, Sendable {
         enabledTools: [ToolKind]? = nil,
         activeGeneratorID: String? = nil,
         petPosition: PetPosition? = nil,
-        hasCompletedOnboarding: Bool? = nil
+        hasCompletedOnboarding: Bool? = nil,
+        language: AppLanguage? = nil
     ) -> AppConfig {
         AppConfig(
             activePetID: activePetID ?? self.activePetID,
             enabledTools: enabledTools ?? self.enabledTools,
             activeGeneratorID: activeGeneratorID ?? self.activeGeneratorID,
             petPosition: petPosition ?? self.petPosition,
-            hasCompletedOnboarding: hasCompletedOnboarding ?? self.hasCompletedOnboarding
+            hasCompletedOnboarding: hasCompletedOnboarding ?? self.hasCompletedOnboarding,
+            language: language ?? self.language
         )
     }
 }

@@ -21,6 +21,13 @@ final class PetWindowSurface: PetSurface {
     weak var dashboardController: SessionDashboardWindowController?
     var selectedDashboardSessionID: String?
     var selectedDashboardJumpTarget: JumpTarget?
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
+
+    func updateLocalizer(_ localizer: AppLocalizer) {
+        self.localizer = localizer
+        dashboardController?.updateLocalizer(localizer)
+        updatePendingCount(approvalPresentation?.pendingCount ?? 0)
+    }
 
     func bind(windowController: PetWindowController?) {
         self.windowController = windowController
@@ -55,7 +62,7 @@ final class PetWindowSurface: PetSurface {
         lastRenderedPetSlug = newSlug
 
         let shouldFade = switchedPet && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        windowController.setContent(PetView(asset: asset, activity: activity) { [weak windowController] frame in
+        windowController.setContent(PetView(asset: asset, activity: activity, localizer: localizer) { [weak windowController] frame in
             windowController?.setHitSprite(frame)
         }, fade: shouldFade)
         if asset == nil {
@@ -110,6 +117,7 @@ final class PetWindowSurface: PetSurface {
             source: source,
             tailEdge: tailEdge,
             tailOffsetX: tailOffsetX,
+            localizer: localizer,
             onJump: onJump,
             onDismiss: onDismiss
         )
@@ -152,6 +160,7 @@ final class PetWindowSurface: PetSurface {
                 tailEdge: measuringEdge,
                 tailOffsetX: 0,
                 presentation: presentation,
+                localizer: localizer,
                 onJump: onJump,
                 onDecision: { _ in }
             )
@@ -175,6 +184,7 @@ final class PetWindowSurface: PetSurface {
                 tailEdge: tailEdge,
                 tailOffsetX: tailOffsetX,
                 presentation: presentation,
+                localizer: localizer,
                 onJump: onJump,
                 onDecision: onDecision
             )
@@ -217,6 +227,7 @@ final class PetWindowSurface: PetSurface {
                 tailEdge: measuringEdge,
                 tailOffsetX: 0,
                 presentation: presentation,
+                localizer: localizer,
                 onJump: onJump,
                 onAnswer: { _ in }
             )
@@ -240,6 +251,7 @@ final class PetWindowSurface: PetSurface {
                 tailEdge: tailEdge,
                 tailOffsetX: tailOffsetX,
                 presentation: presentation,
+                localizer: localizer,
                 onJump: onJump,
                 onAnswer: onAnswer
             )
@@ -294,7 +306,7 @@ final class PetWindowSurface: PetSurface {
             height: size.height
         )
 
-        let badge = NotificationBadge(count: count)
+        let badge = NotificationBadge(count: count, localizer: localizer)
         let window = badgeWindow ?? BubbleWindow(contentRect: frame)
         window.contentViewController = NSHostingController(rootView: badge)
         window.setFrame(frame, display: true)
@@ -307,6 +319,7 @@ final class PetWindowSurface: PetSurface {
 /// decision (decide > notify, technical design §5.3.5).
 private struct NotificationBadge: View {
     let count: Int
+    var localizer: AppLocalizer = AppLocalizer(language: .simplifiedChinese)
 
     var body: some View {
         Text("\(count)")
@@ -315,7 +328,7 @@ private struct NotificationBadge: View {
             .frame(minWidth: 18, minHeight: 18)
             .padding(.horizontal, 4)
             .background(Color(nsColor: .systemRed), in: Capsule())
-            .accessibilityLabel("\(count) 条待查看通知")
+            .accessibilityLabel(localizer.text(.notificationsAccessibility, count))
     }
 }
 

@@ -17,7 +17,11 @@ struct SessionMenuSummary: Equatable {
     }
 
     var title: String {
-        "会话：\(activeCount) 个活跃，\(attentionCount) 个待处理"
+        title(AppLocalizer(language: .simplifiedChinese))
+    }
+
+    func title(_ localizer: AppLocalizer) -> String {
+        localizer.text(.sessionMenuSummary, activeCount, attentionCount)
     }
 }
 
@@ -37,15 +41,18 @@ final class StatusItemController {
     private let actions: Actions
     private let petsProvider: () -> [PetMenuEntry]
     private let sessionSummaryProvider: () -> SessionMenuSummary
+    private let localizerProvider: () -> AppLocalizer
 
     init(
         actions: Actions,
         petsProvider: @escaping () -> [PetMenuEntry],
-        sessionSummaryProvider: @escaping () -> SessionMenuSummary = { SessionMenuSummary(activeCount: 0, attentionCount: 0) }
+        sessionSummaryProvider: @escaping () -> SessionMenuSummary = { SessionMenuSummary(activeCount: 0, attentionCount: 0) },
+        localizerProvider: @escaping () -> AppLocalizer = { AppLocalizer(language: .simplifiedChinese) }
     ) {
         self.actions = actions
         self.petsProvider = petsProvider
         self.sessionSummaryProvider = sessionSummaryProvider
+        self.localizerProvider = localizerProvider
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "VibePet")
@@ -55,26 +62,27 @@ final class StatusItemController {
 
     /// Rebuild the menu so the "switch pet" submenu reflects current assets.
     func rebuild() {
+        let localizer = localizerProvider()
         let menu = NSMenu()
-        let sessionSummary = NSMenuItem(title: sessionSummaryProvider().title, action: nil, keyEquivalent: "")
+        let sessionSummary = NSMenuItem(title: sessionSummaryProvider().title(localizer), action: nil, keyEquivalent: "")
         sessionSummary.isEnabled = false
         menu.addItem(sessionSummary)
         menu.addItem(.separator())
-        menu.addItem(ActionMenuItem(title: "显示 / 隐藏宠物") { [weak self] in self?.actions.togglePetVisibility() })
-        menu.addItem(switchPetItem())
-        menu.addItem(ActionMenuItem(title: "导入宠物…") { [weak self] in self?.actions.importNewPhoto() })
-        menu.addItem(ActionMenuItem(title: "打开设置…") { [weak self] in self?.actions.openSettings() })
+        menu.addItem(ActionMenuItem(title: localizer.text(.menuShowHidePet)) { [weak self] in self?.actions.togglePetVisibility() })
+        menu.addItem(switchPetItem(localizer: localizer))
+        menu.addItem(ActionMenuItem(title: localizer.text(.menuImportPet)) { [weak self] in self?.actions.importNewPhoto() })
+        menu.addItem(ActionMenuItem(title: localizer.text(.menuOpenSettings)) { [weak self] in self?.actions.openSettings() })
         menu.addItem(.separator())
-        menu.addItem(ActionMenuItem(title: "退出 VibePet", key: "q") { [weak self] in self?.actions.quit() })
+        menu.addItem(ActionMenuItem(title: localizer.text(.menuQuit), key: "q") { [weak self] in self?.actions.quit() })
         statusItem.menu = menu
     }
 
-    private func switchPetItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "切换宠物", action: nil, keyEquivalent: "")
+    private func switchPetItem(localizer: AppLocalizer) -> NSMenuItem {
+        let item = NSMenuItem(title: localizer.text(.menuSwitchPet), action: nil, keyEquivalent: "")
         let entries = petsProvider()
         let submenu = NSMenu()
         if entries.isEmpty {
-            let empty = NSMenuItem(title: "（还没有可用宠物）", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: localizer.text(.menuNoPets), action: nil, keyEquivalent: "")
             empty.isEnabled = false
             submenu.addItem(empty)
         } else {
