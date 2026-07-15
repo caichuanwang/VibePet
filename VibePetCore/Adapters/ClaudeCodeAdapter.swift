@@ -136,10 +136,7 @@ public struct ClaudeCodeAdapter: ToolAdapter {
             title: Self.approvalTitle(toolName: toolName),
             risk: risk,
             preview: preview,
-            // Hook output cannot grant a persistent allow in VibePet's verified
-            // contract; leave nil so the UI hides "始终允许".
-            // leave `alwaysAllow` nil so the UI hides "始终允许".
-            alwaysAllow: nil,
+            alwaysAllow: AlwaysAllowOption(label: "始终允许 \(toolName)", scopeHint: toolName),
             requiresTerminalApproval: false
         )
         return makeEnvelope(source: source, content: .approval(content), agentEvent: agentEvent)
@@ -305,23 +302,42 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     // MARK: - Approval response encoding
 
     /// Encodes an approval decision to the Claude Code `PermissionRequest` output.
-    /// `allowAlways` degrades to a one-time allow; the UI hides the button when
-    /// `alwaysAllow` is nil, making that path defensive only.
+    /// `allowAlways` adds a session-scoped allow rule for the approved tool.
     static func encodeApproval(_ decision: ApprovalDecision) -> Data {
         switch decision {
         case let .deny(reason):
             return permissionRequestDecisionJSON(behavior: "deny", message: reason)
         case .allowOnce:
             return permissionRequestDecisionJSON(behavior: "allow", message: nil)
-        case .allowAlways:
-            return permissionRequestDecisionJSON(behavior: "allow", message: nil)
+        case let .allowAlways(scopeHint):
+            return permissionRequestDecisionJSON(
+                behavior: "allow",
+                message: nil,
+                updatedPermissions: [permissionRuleUpdate(for: scopeHint)]
+            )
         }
     }
 
-    private static func permissionRequestDecisionJSON(behavior: String, message: String?) -> Data {
+    private static func permissionRuleUpdate(for toolName: String) -> [String: Any] {
+        [
+            "type": "addRules",
+            "destination": "session",
+            "rules": [["toolName": toolName]],
+            "behavior": "allow",
+        ]
+    }
+
+    private static func permissionRequestDecisionJSON(
+        behavior: String,
+        message: String?,
+        updatedPermissions: [[String: Any]] = []
+    ) -> Data {
         var decision: [String: Any] = ["behavior": behavior]
         if let message = message.flatMap(nonEmpty) {
             decision["message"] = message
+        }
+        if !updatedPermissions.isEmpty {
+            decision["updatedPermissions"] = updatedPermissions
         }
         let payload: [String: Any] = [
             "hookSpecificOutput": [

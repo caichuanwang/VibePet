@@ -69,9 +69,10 @@ Claude Code 安装 12 个 hook key。安装器为每个 key 写入一个 VibePet
 |---|---|---|
 | `允许一次` | `.approval(.allowOnce)` | `decision.behavior: "allow"` |
 | `拒绝` | `.approval(.deny(reason: nil))` | `decision.behavior: "deny"` |
+| `始终允许` | `.approval(.allowAlways(scopeHint: toolName))` | `decision.behavior: "allow"` + `decision.updatedPermissions` 里的 session `addRules` |
 | 关闭/无法展示/defer | `.defer` | 空 stdout，退出 0，让 Claude 回到原生流程 |
 
-当前不展示“始终允许”。代码里有 `allowAlways` 数据结构，但 Claude hook 的持久允许机制未验证，所以 `ApprovalContent.alwaysAllow` 被设为 `nil`。
+Claude `PermissionRequest` 审批会展示“始终允许”。VibePet 只写回 session-scoped permission update，不修改用户或项目 settings。
 
 ### Claude AskUserQuestion
 
@@ -238,7 +239,7 @@ VibePet 的宠物状态不是直接由 hook key 决定，而是由 `SessionState
 - Claude 每个需要权限的工具执行前都会触发 `PreToolUse`；
 - Codex 每个需要权限的工具执行前都会触发 `PermissionRequest`；
 - VibePet 当前对这些请求逐个排队展示；
-- “始终允许”在两端都没有启用；
+- Claude `PermissionRequest` 已启用 session 级“始终允许”，Codex 仍未启用；
 - 因此一次运行中多次 shell、patch、文件写入等操作会导致用户反复确认。
 
 后续如果要降噪，最直接的设计方向是围绕 `approval` / `question` 阻塞通道做策略，而不是减少 session/activity/notification 类 hook。

@@ -36,6 +36,21 @@ final class ClaudeCodeEncodeTests: XCTestCase {
         XCTAssertNil(decision["message"])
     }
 
+    func testAllowAlwaysEmitsSessionPermissionUpdate() throws {
+        let data = adapter.encodeResponse(.approval(.allowAlways(scopeHint: "Bash")), for: sampleEnvelope())
+        let output = try hookSpecificOutput(data)
+        XCTAssertEqual(output["hookEventName"] as? String, "PermissionRequest")
+        let decision = try XCTUnwrap(output["decision"] as? [String: Any])
+        XCTAssertEqual(decision["behavior"] as? String, "allow")
+        let permissions = try XCTUnwrap(decision["updatedPermissions"] as? [[String: Any]])
+        let update = try XCTUnwrap(permissions.first)
+        XCTAssertEqual(update["type"] as? String, "addRules")
+        XCTAssertEqual(update["destination"] as? String, "session")
+        XCTAssertEqual(update["behavior"] as? String, "allow")
+        let rules = try XCTUnwrap(update["rules"] as? [[String: Any]])
+        XCTAssertEqual(rules.first?["toolName"] as? String, "Bash")
+    }
+
     func testDeferEmitsNoJSON() {
         // Defer == empty stdout; the CLI then exits 0 → native permission flow.
         let data = adapter.encodeResponse(.defer, for: sampleEnvelope())

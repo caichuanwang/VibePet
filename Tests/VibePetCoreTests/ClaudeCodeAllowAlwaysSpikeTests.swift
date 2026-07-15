@@ -1,26 +1,22 @@
 import XCTest
 @testable import VibePetCore
 
-/// A Claude Code permission hook cannot grant a persistent allow
-/// (see `Tests/Fixtures/claude/allow-always-spike-notes.md`). These tests pin the
-/// "unsupported" conclusion so a regression that silently re-enables a bogus
-/// allowAlways branch is caught.
+/// Pins the Claude Code `PermissionRequest` allow-always contract.
+/// VibePet exposes a session-scoped allow option and encodes it as
+/// `decision.updatedPermissions`.
 final class ClaudeCodeAllowAlwaysSpikeTests: XCTestCase {
     private let adapter = ClaudeCodeAdapter()
 
-    func testParsedApprovalHasNoAlwaysAllowOption() throws {
-        for fixture in ["permission-request-bash.json"] {
-            let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixtureData(fixture), env: [:]))
-            guard case let .approval(content) = envelope.content else {
-                return XCTFail("Expected .approval for \(fixture)")
-            }
-            XCTAssertNil(content.alwaysAllow, "\(fixture) must not advertise always-allow (unsupported)")
+    func testParsedApprovalAdvertisesAlwaysAllowOption() throws {
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixtureData("permission-request-bash.json"), env: [:]))
+        guard case let .approval(content) = envelope.content else {
+            return XCTFail("Expected .approval")
         }
+        XCTAssertEqual(content.alwaysAllow?.label, "始终允许 Bash")
+        XCTAssertEqual(content.alwaysAllow?.scopeHint, "Bash")
     }
 
-    func testAllowAlwaysDecodesAsPlainAllowNotAPersistentBranch() throws {
-        // Defensive: even if a stale client sends allowAlways, the encoder emits a
-        // plain one-time allow — never a distinct persistent-allow output.
+    func testAllowAlwaysEncodesSessionScopedPermissionRule() throws {
         let data = adapter.encodeResponse(
             .approval(.allowAlways(scopeHint: "Bash")),
             for: sampleEnvelope()
@@ -29,9 +25,14 @@ final class ClaudeCodeAllowAlwaysSpikeTests: XCTestCase {
         let output = try XCTUnwrap(object["hookSpecificOutput"] as? [String: Any])
         let decision = try XCTUnwrap(output["decision"] as? [String: Any])
         XCTAssertEqual(decision["behavior"] as? String, "allow")
-        // No persistent/scope field leaks into the hook output.
-        XCTAssertNil(decision["scopeHint"])
-        XCTAssertNil(decision["alwaysAllow"])
+
+        let permissions = try XCTUnwrap(decision["updatedPermissions"] as? [[String: Any]])
+        let update = try XCTUnwrap(permissions.first)
+        XCTAssertEqual(update["type"] as? String, "addRules")
+        XCTAssertEqual(update["destination"] as? String, "session")
+        XCTAssertEqual(update["behavior"] as? String, "allow")
+        let rules = try XCTUnwrap(update["rules"] as? [[String: Any]])
+        XCTAssertEqual(rules.first?["toolName"] as? String, "Bash")
     }
 
     // MARK: - Helpers

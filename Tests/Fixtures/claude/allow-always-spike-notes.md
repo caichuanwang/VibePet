@@ -1,15 +1,21 @@
-# M4-3a · Claude Code allowAlways schema spike — conclusion
+# M4-3a · Claude Code allowAlways schema spike — updated conclusion
 
 **Date:** 2026-06-19
 **Claude Code hooks docs:** https://code.claude.com/docs/en/hooks.md (verified current)
 
 ## Question
 
-Can a `PreToolUse` hook grant a **persistent or session-scoped** allow, so the
-same tool/command is auto-allowed in the future without re-prompting? This gates
-the "始终允许 / Always allow" button.
+Can a hook grant a **persistent or session-scoped** allow, so the same tool is
+auto-allowed in the future without re-prompting? This gates the "始终允许 /
+Always allow" button.
 
-## Finding: NOT supported via the PreToolUse hook
+## Finding
+
+`PreToolUse` does not support durable permission updates. `PermissionRequest`
+does support a decision-level `updatedPermissions` field, which can add a
+session-scoped allow rule.
+
+### PreToolUse limitation
 
 A `PreToolUse` hook's `permissionDecision` (`allow` / `deny` / `ask`) is
 **per-invocation only**. The hook output contract is:
@@ -32,15 +38,36 @@ Writing to the user's `settings.json` from VibePet would be a side-effecting
 config mutation outside the hook contract — out of scope for the M4 MVP and
 risky to do silently.
 
-## Decision (per M4-3a fallback)
+### PermissionRequest support
 
-`allowAlways` is recorded as **unsupported** for the Claude Code `PreToolUse`
-path in the MVP:
+Claude Code `PermissionRequest` output accepts:
 
-- `ClaudeCodeAdapter` leaves `ApprovalContent.alwaysAllow == nil`.
-- The approval UI hides the "始终允许" button (shown only when `alwaysAllow != nil`).
-- `encodeResponse(.approval(.allowAlways))` degrades to a one-time `allow`
-  (defensive only; the button cannot produce this decision when hidden).
-- No downstream requirement treats `allowAlways` as a hard dependency.
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PermissionRequest",
+    "decision": {
+      "behavior": "allow",
+      "updatedPermissions": [
+        {
+          "type": "addRules",
+          "destination": "session",
+          "rules": [{ "toolName": "Bash" }],
+          "behavior": "allow"
+        }
+      ]
+    }
+  }
+}
+```
 
-Re-evaluate if Claude Code adds a hook-driven persistent permission mechanism.
+## Decision
+
+VibePet enables `allowAlways` for Claude Code `PermissionRequest` approvals:
+
+- `ClaudeCodeAdapter` sets `ApprovalContent.alwaysAllow` from `tool_name`.
+- The approval UI shows "始终允许" when `alwaysAllow != nil`.
+- `encodeResponse(.approval(.allowAlways(scopeHint: toolName)))` emits an
+  `allow` decision with a session-scoped `addRules` permission update.
+- The option is session-scoped only; VibePet still does not mutate user or
+  project settings for persistent permissions.
