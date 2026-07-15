@@ -52,8 +52,10 @@ VibePet 是一个 macOS 原生**桌面宠物 + 深度 agent 集成**应用。一
 
 ### 1.3 产品定位与差异化
 
-最深的交互式 agent 集成 + Codex 宠物生态宿主
-- 改靠**横跨 Claude Code + Codex 的、能在桌面真实 allow/deny + 答多选题 + 跳回终端的深度集成**，配合 Codex 宠物市场的可爱外观。
+开源、本地优先的 macOS 桌面宠物 + 深度交互式 agent 集成 + Codex 宠物生态宿主
+
+- 依靠**横跨 Claude Code + Codex 的、能在桌面真实 allow/deny + 答多选题 + 跳回终端的深度集成**，配合 Codex 宠物生态的可爱外观。
+- 项目以 **GPL-3.0** 开源，鼓励社区审查、修改和贡献，同时坚持无账号、无服务器、无遥测的本地优先边界。
 
 ### 1.4 成功标准（可度量 KPI）
 
@@ -103,11 +105,18 @@ VibePet 是一个 macOS 原生**桌面宠物 + 深度 agent 集成**应用。一
 
 > 各版本更细的非目标见对应 spec 的"非目标"小节。
 
-### 2.4 发布与商业模式（Distribution & Monetization）
+### 2.4 开源与分发（Open Source & Distribution）
 
-- **分发渠道**：计划上架 **Mac App Store**。
-- **付费模式**：**买断制（一次性付费）**，无订阅、无内购账号体系——与 §2.3"纯本地、无服务器、无登录"一致（买断不引入云端账号或服务器依赖）。
-- **已知约束/风险**：App Store 强制 **App Sandbox**，与当前架构存在真实张力——hook 二进制写 `~/.codex`/`~/.claude`、Unix domain socket、osascript 终端跳回均属沙盒外系统副作用。上架前需评估：沙盒豁免（temporary-exception entitlements）/ 迁移到 App Group 容器路径，或退而采用 **Developer ID 公证直分发**作为兜底。该评估属独立工作项，**不改变 §5 现有 fail-open / 稳定路径 / 本地优先的工程约束**。
+- **开源许可**：VibePet 以 **GNU General Public License v3.0（GPL-3.0）** 发布，许可证正文见仓库根目录 `LICENSE`。
+- **项目策略**：VibePet 从收费项目转为开源项目，当前不采用买断、订阅或内购收费模式。
+- **分发渠道**：以源码构建和项目发布页提供的构建产物为主；**Mac App Store 不再是当前承诺的分发渠道**。
+- **已知约束/风险**：如果未来评估 Mac App Store，App Sandbox 仍与当前架构存在真实张力——hook 二进制写 `~/.codex`/`~/.claude`、Unix domain socket、osascript 终端跳回均属沙盒外系统副作用。任何分发方案都不得静默破坏 §5 的 fail-open、稳定路径和本地优先约束。
+
+### 2.5 参考项目与致谢（Acknowledgements）
+
+VibePet **明确参考了 [open-vibe-island](https://github.com/Octane0411/open-vibe-island)**（Octane0411 及其贡献者）。项目的单 Swift Package/四 target 划分、规范化 hook 与会话模型、Unix socket bridge、hook 安装器模式，以及终端跳回策略，都受到 open-vibe-island 的架构与实现启发。
+
+VibePet 在这些思路上按自身范围和模型进行适配：聚焦 Claude Code + Codex，以桌面宠物取代 notch 界面，并加入 Codex spritesheet 宠物宿主。VibePet 不是 open-vibe-island 的原样移植；具体参考点和差异边界见 `AGENTS.md` 的 “Reference Project: open-vibe-island” 一节及对应设计 spec。
 
 ---
 
@@ -354,7 +363,7 @@ VibePet/
 | 不同画廊 Codex 宠物行序/字段差异 | 精灵动画错位 | `pet.json` 声明优先 + canonical 兜底顺序；非法宠物跳过 |
 | 终端 locator 触发 macOS 自动化权限弹窗 | 首次精度/体验 | 全程 fail-open，拒绝即退化为 env+tty，不报错 |
 | 置顶窗口在全屏/多 Space 表现异常 | 宠物被遮挡 | 合适窗口层级与 collectionBehavior；全屏场景验证 |
-| 参考项目 open-vibe-island 架构对齐 | 实现效率 | 可自由查阅其源码作架构与实现参考；按 VibePet 自有模型/命名落地 |
+| 参考来源与自身边界表述不清 | 贡献者难以判断设计来源和差异 | 在 README/PRD 明确致谢 open-vibe-island，并按 VibePet 自有范围、模型与命名适配 |
 
 ### 6.2 路线图
 
@@ -367,6 +376,6 @@ VibePet/
 ## 7. 维护本文档的约定
 
 - 本文只增改"跨版本稳定"的内容；**功能点、验收标准、里程碑不写进来**，留在 specs。
-- 发新版本时：更新 §1.3 产品定位、§2.2 演进表、§3 架构演进、§4 代码锚点与演进标注、§6.2 路线图；并在 §0 更新 specs/archive 索引。
+- 发新版本时：更新 §1.3 产品定位、§2.2 演进表、§2.4 开源与分发、§3 架构演进、§4 代码锚点与演进标注、§6.2 路线图；并在 §0 更新 specs/archive 索引。
 - §4 代码参考的演进标注（🟢🟡🔴✨）应随实现推进刷新——✨ 落地后转 🟢/🟡，🔴 删除后从表中移除并指向 archive。
 - 与 `CLAUDE.md` 项目护栏保持一致；二者冲突时以 `CLAUDE.md`（用户指令）为准。

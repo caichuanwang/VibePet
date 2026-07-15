@@ -6,6 +6,8 @@ The pet also reflects ongoing session state (running a tool / waiting on you / d
 
 VibePet is **local-first**: bridge transport, hook handling, pet sourcing, and rendering all run on the user's machine. No account, cloud sync, telemetry, or remote generation is required.
 
+VibePet is a **GPL-3.0 open-source project**. The project currently does not use buyout, subscription, or in-app-purchase pricing.
+
 See the [PRD](docs/VibePet-PRD.md) for product direction, architecture, and the code map.
 
 ## Current Status
@@ -109,6 +111,14 @@ VibePet is local-first: no account, cloud sync, telemetry, or remote generation 
 
 Hook and bridge changes must preserve **fail-open** behavior: if VibePet is not running, cannot connect, times out, or encounters malformed input, AI coding tools must fall back to their native approval flow instead of hanging.
 
+## Acknowledgements
+
+VibePet explicitly draws architectural and implementation inspiration from [open-vibe-island](https://github.com/Octane0411/open-vibe-island) by Octane0411 and its contributors. In particular, its package split, normalized hook and session models, Unix-socket bridge, hook installer patterns, and terminal jump-back approach informed VibePet's design. VibePet adapts those ideas to its own scope and models, replacing the notch-oriented interface with a desktop pet and a Codex spritesheet pet host.
+
 ## Contributing
 
 Keep changes small and tied to a documented spec. Prefer adding or updating focused XCTest coverage for bridge encoding, adapter behavior, persistence, the installer, and fail-open paths. See [AGENTS.md](AGENTS.md) for repository conventions, commands, and commit guidance.
+
+## License
+
+VibePet is licensed under the [GNU General Public License v3.0](LICENSE).
