@@ -20,19 +20,24 @@ final class HooksBinaryLocatorTests: XCTestCase {
         XCTAssertEqual(located?.standardizedFileURL, override.standardizedFileURL)
     }
 
-    func testIgnoresNonExecutableOverride() throws {
+    func testRejectsNonExecutableExplicitOverrideWithoutFallback() throws {
         let dir = try tempDir()
         let plain = dir.appendingPathComponent("not-exec")
-        try Data("x".utf8).write(to: plain) // exists but not executable
-        let adjacent = try makeExecutable(dir.appendingPathComponent("VibePetHooks"))
+        try Data("x".utf8).write(to: plain)
+        _ = try makeExecutable(dir.appendingPathComponent("VibePetHooks"))
 
-        let located = HooksBinaryLocator.locate(
+        let result = HooksBinaryLocator.locateResult(
             executableDirectory: dir,
             currentDirectory: dir,
             environment: [HooksBinaryLocator.environmentKey: plain.path]
         )
 
-        XCTAssertEqual(located?.standardizedFileURL, adjacent.standardizedFileURL, "falls through to the adjacent binary")
+        XCTAssertEqual(result, .invalidExplicitOverride(plain.standardizedFileURL))
+        XCTAssertNil(HooksBinaryLocator.locate(
+            executableDirectory: dir,
+            currentDirectory: dir,
+            environment: [HooksBinaryLocator.environmentKey: plain.path]
+        ))
     }
 
     func testFindsExecutableInHelpersSubdirectory() throws {

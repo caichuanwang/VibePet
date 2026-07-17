@@ -30,10 +30,15 @@
    - 因此 `HookRuntime` 的既有 `.deferred`（不写 stdout）**已正确实现 Codex decline**——M6 **不需要**改 `HookRuntime`（订正 design.md D2 早先"Codex decline 为非空 JSON"的假设）。
    - `CodexAdapter.encodeResponse(.defer)` 与 `.question` 均返回空 `Data`（decline）。
 
-2. **`requiresTerminalApproval` 降级触发条件为暂定（unverified）**。
-   - Codex 的 `PermissionRequest` 本质是二元 allow/deny；官方 hooks 文档**没有**结构化提问/plan 输入事件。
-   - 现实现：当 `tool_name ∈ {"AskUserQuestion"}`（镜像 Claude 命名）时降级为 `.approval(requiresTerminalApproval=true)`。这是**占位假设**，待真实 Codex 会话核对后调整 `CodexAdapter.freeformInputTools`。
-   - 兜底：任何无法判定的 Codex 事件 → `parseEvent` 返回 `nil`（忽略）或 decline，绝不卡住——fail-open 成立。
+2. **不实现未经验证的 `requiresTerminalApproval` 触发器**。
+   - Codex 的 `PermissionRequest` 本质是二元 allow/deny；现有 fixture 与上游测试没有结构化提问/plan 输入事件。
+   - `AskUserQuestion` 是 Claude Code 工具名，不能据此推断 Codex 能力。VibePet 不再把它列为 Codex 特例；未知二元 PermissionRequest 仅显示 generic preview。
+   - 只有未来获得真实 Codex fixture 或固定上游测试后，才可增加 terminal-only 降级映射。无法安全编码的事件继续 nil/decline，保持 fail-open。
+
+3. **session identity 按投递面限定**。
+   - hooks fixture 使用 `session_id`。
+   - `agent-turn-complete` notify fixture 使用 `thread-id`；`turn-id` 是 turn identity，不能回退成 session identity。
+   - `thread_id` 以及 notify 上的 `session_id` 没有当前证据，不作为 alias。
 
 ## 安装写入方式（M6-5，用户指定"和 open-vibe-island 一样"，复刻其做法）
 

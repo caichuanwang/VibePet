@@ -94,6 +94,22 @@ final class BinaryInstallerTests: XCTestCase {
         XCTAssertTrue(copied)
         XCTAssertTrue(FileManager.default.fileExists(atPath: installer.binaryURL.path))
     }
+
+    func testRejectsSourceEqualToDestinationWithoutDeletingIt() throws {
+        let root = try TempRoot()
+        let installer = BinaryInstaller(applicationSupportRoot: root.url)
+        let destination = installer.binaryURL
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("existing-helper".utf8).write(to: destination)
+
+        XCTAssertThrowsError(
+            try installer.install(from: destination, version: "0.2.0", installedVersion: "0.1.0")
+        )
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "existing-helper")
+    }
 }
 
 /// A throwaway Application Support root for isolation.

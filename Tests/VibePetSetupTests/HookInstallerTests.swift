@@ -44,13 +44,18 @@ final class HookInstallerTests: XCTestCase {
         let installer = HookInstaller(applicationSupportRoot: root.url, writers: [
             ClaudeCodeConfigWriter(configURL: configURL, hookBinaryPath: InstallPaths.hookBinaryURL(applicationSupportRoot: root.url).path),
         ])
+        let manifestURL = InstallManifestStore(applicationSupportRoot: root.url).manifestURL
 
         _ = try installer.install(tool: .claudeCode, hookBinarySource: try root.makeSourceBinary(contents: "hooks"))
+        let configAfterFirstInstall = try Data(contentsOf: configURL)
+        let manifestAfterFirstInstall = try Data(contentsOf: manifestURL)
         _ = try installer.install(tool: .claudeCode, hookBinarySource: try root.makeSourceBinary(contents: "hooks"))
 
         let manifest = InstallManifestStore(applicationSupportRoot: root.url).read()
         XCTAssertEqual(manifest.tools.count, 1)
         XCTAssertEqual(installer.status(tool: .claudeCode), .enabled)
+        XCTAssertEqual(try Data(contentsOf: configURL), configAfterFirstInstall)
+        XCTAssertEqual(try Data(contentsOf: manifestURL), manifestAfterFirstInstall)
     }
 
     func testInstallBacksUpExistingConfig() throws {
@@ -135,9 +140,9 @@ final class HookInstallerTests: XCTestCase {
         try Data("{}".utf8).write(to: configURL)
         XCTAssertEqual(installer.health(tool: .claudeCode)?.isHealthy, false)
 
-        // Idempotent install can't fix it — the manifest still says "installed".
+        // Reinstall reconciles drift even when the manifest still says installed.
         _ = try installer.install(tool: .claudeCode, hookBinarySource: try root.makeSourceBinary(contents: "hooks"))
-        XCTAssertEqual(installer.health(tool: .claudeCode)?.isHealthy, false, "install short-circuits on a recorded install")
+        XCTAssertEqual(installer.health(tool: .claudeCode)?.isHealthy, true, "install reconciles current disk state")
 
         // Repair forces the rewrite.
         _ = try installer.repair(tool: .claudeCode, hookBinarySource: try root.makeSourceBinary(contents: "hooks"))

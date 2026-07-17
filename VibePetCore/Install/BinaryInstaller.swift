@@ -33,6 +33,11 @@ public struct BinaryInstaller: Sendable {
         installedVersion: String?
     ) throws -> Bool {
         let destination = binaryURL
+        let resolvedSource = source.standardizedFileURL.resolvingSymlinksInPath()
+        let resolvedDestination = destination.standardizedFileURL.resolvingSymlinksInPath()
+        guard resolvedSource != resolvedDestination else {
+            throw InstallError.sourceMatchesDestination(path: destination.path)
+        }
         let exists = FileManager.default.fileExists(atPath: destination.path)
         if exists, installedVersion == version, sameContents(source, destination) {
             return false
@@ -51,6 +56,10 @@ public struct BinaryInstaller: Sendable {
             ofItemAtPath: destination.path
         )
         return true
+    }
+
+    public enum InstallError: Error, Equatable, Sendable {
+        case sourceMatchesDestination(path: String)
     }
 
     /// Whether two files hold identical bytes. A read failure is treated as "differ"

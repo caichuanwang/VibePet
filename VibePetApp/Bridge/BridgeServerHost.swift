@@ -28,19 +28,20 @@ final class BridgeServerHost {
     private var sessionState = SessionState()
     private var server: BridgeServer?
     private var notifyTask: Task<Void, Never>?
-    private var decideTask: Task<Void, Never>?
     private var livenessTask: Task<Void, Never>?
+    /// Covers EOF arriving before the decoded decision reaches the main actor.
+    /// Entries are short-lived and pruned whenever the set is accessed.
+    private var cancelledDecisionDeadlines: [UUID: Date] = [:]
+    private var pendingDecisionEnvelopes: [UUID: BridgeEnvelope] = [:]
+    private var pendingDecisionOrder: [UUID] = []
+    private var endedSessionIDs: Set<String> = []
+    private var isStopping = false
+    /// Invalidates async decision work from a prior stop/start lifecycle.
+    private var generation: UInt64 = 0
     /// Receiving a real Codex hook event is the runtime evidence that the user
     /// trusted VibePet in `/hooks`; flip the manifest to `trustedActive` once
     /// (M6-5a). Cached so we stop hitting disk after the first activation.
     private var codexTrustMarked = false
-
-    /// A response-bearing request plus the `Sendable` reply that resumes the
-    /// suspended handler with the user's decision.
-    private struct DecisionRequest: Sendable {
-        let envelope: BridgeEnvelope
-        let reply: @Sendable (BridgeResponse) -> Void
-    }
 
     init(
         petController: PetController,
@@ -80,8 +81,11 @@ final class BridgeServerHost {
     }
 
     func start() {
+        generation &+= 1
+        let startGeneration = generation
+        isStopping = false
+        cancelledDecisionDeadlines.removeAll()
         let (notifyStream, notifyContinuation) = AsyncStream<BridgeEnvelope>.makeStream()
-        let (decideStream, decideContinuation) = AsyncStream<DecisionRequest>.makeStream()
 
         notifyTask = Task { @MainActor [petController] in
             for await envelope in notifyStream {
@@ -93,41 +97,27 @@ final class BridgeServerHost {
             }
         }
 
-        decideTask = Task { @MainActor [petController] in
-            for await request in decideStream {
-                self.markCodexTrustedIfNeeded(request.envelope)
-                self.applyDecisionEntry(request.envelope)
-                // Await each decision on its own task so a long wait (default 20s)
-                // does not block subsequent requests or notifications.
-                Task { @MainActor in
-                    let response = await petController.requestDecision(for: request.envelope)
-                    self.applyDecisionResolution(response, for: request.envelope)
-                    request.reply(response)
+        let server = BridgeServer(
+            socketPath: socketPath,
+            cancellationHandler: { [weak self] requestID in
+                Task { @MainActor [weak self] in
+                    self?.cancelDecision(requestID: requestID, generation: startGeneration)
                 }
             }
-        }
-
-        let server = BridgeServer(socketPath: socketPath) { envelope in
-            if envelope.content.needsResponse {
-                let response: BridgeResponse = await withCheckedContinuation { continuation in
-                    decideContinuation.yield(
-                        DecisionRequest(envelope: envelope) { continuation.resume(returning: $0) }
-                    )
-                }
-                return BridgeResponseEnvelope(requestId: envelope.requestId, response: response)
-            } else {
-                notifyContinuation.yield(envelope)
-                // Notifications don't need a real response; the CLI sends one-way
-                // and closes. Reply with `defer` to satisfy the handler contract.
+        ) { [weak self] envelope in
+            guard let self else {
                 return BridgeResponseEnvelope(requestId: envelope.requestId, response: .defer)
             }
+            if envelope.content.needsResponse {
+                let response = await self.processDecision(envelope, generation: startGeneration)
+                return BridgeResponseEnvelope(requestId: envelope.requestId, response: response)
+            }
+            notifyContinuation.yield(envelope)
+            return BridgeResponseEnvelope(requestId: envelope.requestId, response: .defer)
         }
         self.server = server
 
-        startLivenessSweep()
-        Task { @MainActor in
-            await runLivenessSweepOnce()
-        }
+        startLivenessSweep(generation: startGeneration)
 
         Task {
             do {
@@ -139,30 +129,192 @@ final class BridgeServerHost {
     }
 
     func stop() {
+        guard !isStopping else { return }
+        isStopping = true
+        generation &+= 1
+        let resolved = resolvePendingActionableStateForStop()
+        petController.cancelAllDecisions()
+        if resolved {
+            publishSessionState(allowGreeting: false)
+        }
         server?.stop()
         server = nil
         notifyTask?.cancel()
         notifyTask = nil
-        decideTask?.cancel()
-        decideTask = nil
         livenessTask?.cancel()
         livenessTask = nil
+        cancelledDecisionDeadlines.removeAll()
+        pendingDecisionEnvelopes.removeAll()
+        pendingDecisionOrder.removeAll()
     }
 
+    private func processDecision(_ envelope: BridgeEnvelope, generation requestGeneration: UInt64) async -> BridgeResponse {
+        pruneCancelledDecisionTombstones()
+        guard !isStopping,
+              requestGeneration == generation,
+              !Task.isCancelled,
+              cancelledDecisionDeadlines.removeValue(forKey: envelope.requestId) == nil,
+              pendingDecisionEnvelopes[envelope.requestId] == nil,
+              !endedSessionIDs.contains(envelope.source.sessionID),
+              sessionState.sessionsByID[envelope.source.sessionID]?.isSessionEnded != true else {
+            return .defer
+        }
+
+        markCodexTrustedIfNeeded(envelope)
+        let sessionAlreadyPending = pendingDecisionEnvelopes.values.contains {
+            $0.source.sessionID == envelope.source.sessionID
+        }
+        pendingDecisionEnvelopes[envelope.requestId] = envelope
+        pendingDecisionOrder.append(envelope.requestId)
+        if !sessionAlreadyPending {
+            applyDecisionEntry(envelope)
+        }
+        let response = await petController.requestDecision(for: envelope)
+        guard !isStopping, requestGeneration == generation, !Task.isCancelled else {
+            return .defer
+        }
+        cancelledDecisionDeadlines.removeValue(forKey: envelope.requestId)
+        removePendingDecision(requestID: envelope.requestId)
+        if !reconcileNextPendingDecision(sessionID: envelope.source.sessionID) {
+            applyDecisionResolution(response, for: envelope)
+        }
+        return response
+    }
+
+    private func cancelDecision(requestID: UUID, generation requestGeneration: UInt64) {
+        guard !isStopping, requestGeneration == generation else { return }
+        pruneCancelledDecisionTombstones()
+        cancelledDecisionDeadlines[requestID] = Date().addingTimeInterval(5)
+        let cancelled = removePendingDecision(requestID: requestID)
+        petController.cancelDecision(requestId: requestID)
+        guard let sessionID = cancelled?.source.sessionID else { return }
+        if reconcileNextPendingDecision(sessionID: sessionID) {
+            return
+        }
+        guard
+              sessionState.apply(.actionableStateResolved(
+                  sessionID: sessionID,
+                  timestamp: .now,
+                  summary: localizerProvider().text(.handledInTerminal)
+              )) else {
+            return
+        }
+        publishSessionState()
+    }
+
+    @discardableResult
+    private func removePendingDecision(requestID: UUID) -> BridgeEnvelope? {
+        pendingDecisionOrder.removeAll { $0 == requestID }
+        return pendingDecisionEnvelopes.removeValue(forKey: requestID)
+    }
+
+    private func cancelPendingDecisions(sessionID: String) {
+        let requestIDs = pendingDecisionOrder.filter {
+            pendingDecisionEnvelopes[$0]?.source.sessionID == sessionID
+        }
+        for requestID in requestIDs {
+            removePendingDecision(requestID: requestID)
+            petController.cancelDecision(requestId: requestID)
+        }
+    }
+
+    private func reconcileNextPendingDecision(sessionID: String) -> Bool {
+        guard let envelope = pendingDecisionOrder.lazy
+            .compactMap({ self.pendingDecisionEnvelopes[$0] })
+            .first(where: { $0.source.sessionID == sessionID }) else {
+            return false
+        }
+        let changed: Bool
+        switch envelope.content {
+        case let .approval(content):
+            changed = sessionState.apply(.permissionRequested(
+                sessionID: sessionID,
+                timestamp: .now,
+                summary: content.title
+            ))
+        case let .question(content):
+            changed = sessionState.apply(.questionAsked(
+                sessionID: sessionID,
+                timestamp: .now,
+                summary: content.title
+            ))
+        case .completion, .status:
+            return false
+        }
+        let merged = mergeSourceJumpTarget(envelope.source, sessionID: sessionID)
+        if changed || merged {
+            publishSessionState()
+        }
+        return true
+    }
+
+    private func resolvePendingActionableStateForStop() -> Bool {
+        var changed = false
+        let actionableIDs = sessionState.sessionsByID.values
+            .filter { $0.phase.requiresAttention }
+            .map(\.id)
+        for sessionID in actionableIDs {
+            changed = sessionState.apply(.actionableStateResolved(
+                sessionID: sessionID,
+                timestamp: .now,
+                summary: localizerProvider().text(.handledInTerminal)
+            )) || changed
+        }
+        return changed
+    }
+
+    private func pruneCancelledDecisionTombstones(now: Date = .now) {
+        cancelledDecisionDeadlines = cancelledDecisionDeadlines.filter { $0.value > now }
+    }
+
+}
+
+extension BridgeServerHost {
     var sessionStateSnapshot: SessionState {
         sessionState
     }
 
     func runLivenessSweepOnce() async {
+        await runLivenessSweepOnce(generation: nil)
+    }
+
+    private func runLivenessSweepOnce(generation sweepGeneration: UInt64?) async {
+        guard isCurrentLivenessSweep(generation: sweepGeneration) else { return }
         let activeSessions = await activeSessionProvider()
-        let discoveredSessionIDs = importActiveSessions(activeSessions)
-        let aliveSessionIDs = await liveSessionProvider(sessionState).union(discoveredSessionIDs)
-        sessionState.markProcessLiveness(aliveSessionIDs: aliveSessionIDs)
-        let visibleSessions = sessionState.visibleSessions
+        guard isCurrentLivenessSweep(generation: sweepGeneration) else { return }
+
+        let livenessInput = sessionState
+        let observedSessionIDs = Set(livenessInput.sessionsByID.keys)
+        let liveSessionIDs = await liveSessionProvider(livenessInput)
+        guard isCurrentLivenessSweep(generation: sweepGeneration) else { return }
+
+        var previewState = sessionState
+        let previewDiscoveredIDs = importActiveSessions(activeSessions, into: &previewState)
+        let previewNewIDs = Set(previewState.sessionsByID.keys).subtracting(observedSessionIDs)
+        let previewChangedIDs = changedSessionIDs(from: livenessInput, to: previewState)
+        previewState.markProcessLiveness(
+            aliveSessionIDs: liveSessionIDs
+                .union(previewDiscoveredIDs)
+                .union(previewNewIDs)
+                .union(previewChangedIDs)
+        )
+        let visibleSessions = previewState.visibleSessions
         let resolver = terminalJumpResolver
         let jumpTargetUpdates = await Task.detached(priority: .utility) {
             resolver.resolveJumpTargets(for: visibleSessions)
         }.value
+        guard isCurrentLivenessSweep(generation: sweepGeneration) else { return }
+
+        let previousState = sessionState
+        let newSessionIDs = Set(sessionState.sessionsByID.keys).subtracting(observedSessionIDs)
+        let changedSessionIDs = changedSessionIDs(from: livenessInput, to: sessionState)
+        let discoveredSessionIDs = importActiveSessions(activeSessions, into: &sessionState)
+        sessionState.markProcessLiveness(
+            aliveSessionIDs: liveSessionIDs
+                .union(discoveredSessionIDs)
+                .union(newSessionIDs)
+                .union(changedSessionIDs)
+        )
         for (sessionID, jumpTarget) in jumpTargetUpdates {
             sessionState.apply(.jumpTargetUpdated(
                 sessionID: sessionID,
@@ -171,22 +323,27 @@ final class BridgeServerHost {
             ))
         }
         sessionState.removeInvisibleSessions()
-        publishSessionState()
+        if sessionState != previousState {
+            publishSessionState()
+        }
     }
 
-    private func importActiveSessions(_ activeSessions: [ActiveAgentSession]) -> Set<String> {
+    private func importActiveSessions(
+        _ activeSessions: [ActiveAgentSession],
+        into state: inout SessionState
+    ) -> Set<String> {
         var discoveredAliveIDs: Set<String> = []
         for activeSession in activeSessions {
-            if sessionState.sessionsByID[activeSession.id] != nil {
+            if state.sessionsByID[activeSession.id] != nil {
                 discoveredAliveIDs.insert(activeSession.id)
                 continue
             }
-            if let matchingHookSession = matchingHookSession(for: activeSession) {
+            if let matchingHookSession = matchingHookSession(for: activeSession, in: state) {
                 discoveredAliveIDs.insert(matchingHookSession.id)
                 continue
             }
             let now = Date.now
-            sessionState.upsertDiscoveredSession(AgentSession(
+            state.upsertDiscoveredSession(AgentSession(
                 id: activeSession.id,
                 title: activeSession.title,
                 tool: activeSession.tool,
@@ -205,26 +362,82 @@ final class BridgeServerHost {
         return discoveredAliveIDs
     }
 
-    private func startLivenessSweep() {
+    private func startLivenessSweep(generation sweepGeneration: UInt64) {
         livenessTask?.cancel()
         let nanos = UInt64(livenessInterval * 1_000_000_000)
         livenessTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runLivenessSweepOnce(generation: sweepGeneration)
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: nanos)
-                guard !Task.isCancelled else { return }
-                await self?.runLivenessSweepOnce()
+                guard self.isCurrentLivenessSweep(generation: sweepGeneration) else { return }
+                await self.runLivenessSweepOnce(generation: sweepGeneration)
             }
         }
     }
 
+    private func isCurrentLivenessSweep(generation sweepGeneration: UInt64?) -> Bool {
+        guard !isStopping, !Task.isCancelled else { return false }
+        guard let sweepGeneration else { return true }
+        return sweepGeneration == generation
+    }
+
+    private func changedSessionIDs(from previous: SessionState, to current: SessionState) -> Set<String> {
+        Set(current.sessionsByID.compactMap { sessionID, session in
+            guard let previousSession = previous.sessionsByID[sessionID],
+                  previousSession != session else {
+                return nil
+            }
+            return sessionID
+        })
+    }
+
     private func applyNotification(_ envelope: BridgeEnvelope) {
-        if let event = envelope.agentEvent {
-            apply(rekeyEventIfNeeded(event, source: envelope.source), source: envelope.source)
-            publishSessionState()
+        let event = envelope.agentEvent.map {
+            rekeyEventIfNeeded($0, source: envelope.source)
+        } ?? eventFromEnvelope(envelope)
+        let isNativeSessionEnd: Bool
+        if case let .sessionCompleted(sessionID, _, _, _, isSessionEnd) = event,
+           isSessionEnd {
+            isNativeSessionEnd = true
+            endedSessionIDs.insert(sessionID)
+            endedSessionIDs.insert(envelope.source.sessionID)
+            cancelPendingDecisions(sessionID: sessionID)
+            if envelope.source.sessionID != sessionID {
+                cancelPendingDecisions(sessionID: envelope.source.sessionID)
+            }
+        } else {
+            isNativeSessionEnd = false
+        }
+
+        if !isNativeSessionEnd,
+           endedSessionIDs.contains(event.sessionID) || endedSessionIDs.contains(envelope.source.sessionID) {
+            var changed = false
+            if sessionState.sessionsByID[event.sessionID]?.isSessionEnded == true,
+               case .jumpTargetUpdated = event {
+                changed = apply(event, source: envelope.source)
+            }
+            changed = mergeSourceJumpTarget(envelope.source, sessionID: event.sessionID) || changed
+            if changed {
+                publishSessionState()
+            }
             return
         }
-        sessionState.apply(eventFromEnvelope(envelope))
-        publishSessionState()
+
+        var changed = false
+        if sessionState.sessionsByID[event.sessionID] == nil,
+           !event.isSessionStart,
+           !hasAmbiguousSessionMatch(tool: envelope.source.tool, workingDirectory: envelope.source.cwd) {
+            changed = ensureSessionExists(
+                for: envelope,
+                at: event.timestamp.addingTimeInterval(-0.001)
+            )
+        }
+        changed = apply(event, source: envelope.source) || changed
+        changed = mergeSourceJumpTarget(envelope.source, sessionID: event.sessionID) || changed
+        if changed {
+            publishSessionState()
+        }
     }
 
     private func rekeyEventIfNeeded(_ event: AgentEvent, source: SourceInfo) -> AgentEvent {
@@ -242,61 +455,84 @@ final class BridgeServerHost {
     }
 
     private func uniquelyMatchedSession(tool: ToolKind, workingDirectory: String) -> AgentSession? {
-        let matches = sessionState.sessionsByID.values.filter {
-            $0.tool == tool && $0.jumpTarget?.workingDirectory == workingDirectory
-        }
+        let matches = sessionsMatching(tool: tool, workingDirectory: workingDirectory)
         return matches.count == 1 ? matches[0] : nil
     }
 
+    private func hasAmbiguousSessionMatch(tool: ToolKind, workingDirectory: String?) -> Bool {
+        guard let workingDirectory else { return false }
+        return sessionsMatching(tool: tool, workingDirectory: workingDirectory).count > 1
+    }
+
+    private func sessionsMatching(tool: ToolKind, workingDirectory: String) -> [AgentSession] {
+        sessionState.sessionsByID.values.filter {
+            $0.tool == tool && $0.jumpTarget?.workingDirectory == workingDirectory
+        }
+    }
+
     private func applyDecisionEntry(_ envelope: BridgeEnvelope) {
-        ensureSessionExists(for: envelope)
+        let timestamp = envelope.agentEvent?.timestamp ?? .now
+        var changed = ensureSessionExists(for: envelope, at: timestamp)
         if let event = envelope.agentEvent {
-            apply(event, source: envelope.source)
+            changed = apply(event, source: envelope.source) || changed
+        } else {
+            switch envelope.content {
+            case let .approval(content):
+                changed = sessionState.apply(.permissionRequested(
+                    sessionID: envelope.source.sessionID,
+                    timestamp: timestamp,
+                    summary: content.title
+                )) || changed
+            case let .question(content):
+                changed = sessionState.apply(.questionAsked(
+                    sessionID: envelope.source.sessionID,
+                    timestamp: timestamp,
+                    summary: content.title
+                )) || changed
+            case .completion, .status:
+                break
+            }
+        }
+        changed = mergeSourceJumpTarget(envelope.source, sessionID: envelope.source.sessionID) || changed
+        if changed {
             publishSessionState()
-            return
         }
-        switch envelope.content {
-        case let .approval(content):
-            sessionState.apply(.permissionRequested(
-                sessionID: envelope.source.sessionID,
-                timestamp: .now,
-                summary: content.title
-            ))
-        case let .question(content):
-            sessionState.apply(.questionAsked(
-                sessionID: envelope.source.sessionID,
-                timestamp: .now,
-                summary: content.title
-            ))
-        case .completion, .status:
-            break
-        }
-        publishSessionState()
     }
 
     private func applyDecisionResolution(_ response: BridgeResponse, for envelope: BridgeEnvelope) {
+        let changed: Bool
         switch response {
         case let .approval(decision):
             switch decision {
             case .allowOnce, .allowAlways:
-                sessionState.resolvePermission(sessionID: envelope.source.sessionID, approved: true, at: .now)
+                changed = sessionState.resolvePermission(
+                    sessionID: envelope.source.sessionID,
+                    approved: true,
+                    at: .now
+                )
             case .deny:
-                sessionState.resolvePermission(sessionID: envelope.source.sessionID, approved: false, at: .now)
+                changed = sessionState.resolvePermission(
+                    sessionID: envelope.source.sessionID,
+                    approved: false,
+                    at: .now
+                )
             }
         case let .question(answer):
-            sessionState.answerQuestion(
+            changed = sessionState.answerQuestion(
                 sessionID: envelope.source.sessionID,
                 summary: answer.answers.values.sorted().joined(separator: " · "),
                 at: .now
             )
         case .defer:
-            sessionState.apply(.actionableStateResolved(
+            changed = sessionState.apply(.actionableStateResolved(
                 sessionID: envelope.source.sessionID,
                 timestamp: .now,
                 summary: localizerProvider().text(.handledInTerminal)
             ))
         }
-        publishSessionState()
+        if changed {
+            publishSessionState()
+        }
     }
 
     private func eventFromEnvelope(_ envelope: BridgeEnvelope) -> AgentEvent {
@@ -330,24 +566,34 @@ final class BridgeServerHost {
         }
     }
 
-    private func publishSessionState() {
-        if sessionState.activeActionableSession != nil {
-            petController.sync(with: sessionState)
-        } else if let sessionID = sessionState.nextUngreetedRunningSessionID, petController.greet() {
-            sessionState.markGreetingShown(for: sessionID)
-        } else {
-            petController.sync(with: sessionState)
+    private func publishSessionState(allowGreeting: Bool = true) {
+        if allowGreeting,
+           sessionState.activeActionableSession == nil,
+           let sessionID = sessionState.nextUngreetedRunningSessionID {
+            var greetedState = sessionState
+            greetedState.markGreetingShown(for: sessionID)
+            if petController.sync(with: greetedState, activityOverride: .greeting) {
+                sessionState = greetedState
+                onSessionStateChange(sessionState)
+                return
+            }
         }
+
+        // A rejected greeting (for example while notify/decide owns the surface)
+        // keeps the session ungreeted so a later transition can try again.
+        let activityOverride: SessionPetActivity? = allowGreeting ? nil : .idle
+        petController.sync(with: sessionState, activityOverride: activityOverride)
         onSessionStateChange(sessionState)
     }
 
-    private func ensureSessionExists(for envelope: BridgeEnvelope) {
+    @discardableResult
+    private func ensureSessionExists(for envelope: BridgeEnvelope, at timestamp: Date) -> Bool {
         guard sessionState.sessionsByID[envelope.source.sessionID] == nil else {
-            return
+            return false
         }
-        sessionState.apply(.sessionStarted(
+        return sessionState.apply(.sessionStarted(
             sessionID: envelope.source.sessionID,
-            timestamp: .now,
+            timestamp: timestamp,
             title: envelope.source.projectName ?? toolTitle(envelope.source.tool),
             tool: envelope.source.tool,
             summary: localizerProvider().text(.sessionStarted),
@@ -365,29 +611,39 @@ final class BridgeServerHost {
     }
 
     func applyForTesting(_ event: AgentEvent) {
-        apply(event, source: nil)
-        publishSessionState()
+        if apply(event, source: nil) {
+            publishSessionState()
+        }
     }
 
-    private func apply(_ event: AgentEvent, source: SourceInfo?) {
-        if case .sessionStarted = event {
-            removeMatchingDiscoveredPlaceholder(for: event, source: source)
+    @discardableResult
+    private func apply(_ event: AgentEvent, source: SourceInfo?) -> Bool {
+        if case .sessionStarted = event,
+           sessionState.sessionsByID[event.sessionID] == nil,
+           let match = matchingDiscoveredSession(for: event, source: source) {
+            return sessionState.replaceDiscoveredSession(sessionID: match.id, with: event)
         }
-        sessionState.apply(event)
+        return sessionState.apply(event)
     }
 
-    private func removeMatchingDiscoveredPlaceholder(for event: AgentEvent, source: SourceInfo?) {
-        guard sessionState.sessionsByID[event.sessionID] == nil else {
-            return
+    @discardableResult
+    private func mergeSourceJumpTarget(_ source: SourceInfo, sessionID: String) -> Bool {
+        guard let incoming = source.jumpTarget,
+              sessionState.sessionsByID[sessionID] != nil else {
+            return false
         }
-        guard let match = matchingDiscoveredSession(for: event, source: source) else {
-            return
-        }
-        sessionState.removeSession(sessionID: match.id)
+        return sessionState.apply(.jumpTargetUpdated(
+            sessionID: sessionID,
+            timestamp: .now,
+            jumpTarget: incoming
+        ))
     }
 
-    private func matchingHookSession(for activeSession: ActiveAgentSession) -> AgentSession? {
-        let matches = sessionState.sessionsByID.values.filter { session in
+    private func matchingHookSession(
+        for activeSession: ActiveAgentSession,
+        in state: SessionState
+    ) -> AgentSession? {
+        let matches = state.sessionsByID.values.filter { session in
             !Self.isDiscoveredSessionID(session.id)
                 && session.tool == activeSession.tool
                 && Self.jumpTargetsMatch(session.jumpTarget, activeSession.jumpTarget)

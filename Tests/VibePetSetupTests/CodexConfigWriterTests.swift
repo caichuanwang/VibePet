@@ -128,6 +128,130 @@ final class CodexConfigWriterTests: XCTestCase {
         XCTAssertEqual(toml.components(separatedBy: "hooks = true").count - 1, 1, "feature flag not duplicated")
     }
 
+    func testInstallAndUninstallPreserveUserHookSharingManagedMatcherGroup() throws {
+        let dir = try tempCodexDir()
+        let hooksURL = dir.appendingPathComponent("hooks.json")
+        try Data("""
+        {
+          "hooks": {
+            "PermissionRequest": [
+              {
+                "matcher": "shared",
+                "hooks": [
+                  {
+                    "type": "command",
+                    "command": "'\(binaryPath)' --tool codex",
+                    "statusMessage": "Managed by VibePet"
+                  },
+                  {
+                    "type": "command",
+                    "command": "/usr/local/bin/user-codex-hook"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+        """.utf8).write(to: hooksURL)
+        let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
+
+        try writer.install(arguments: ["--tool", "codex"])
+        var hooks = try hooksObject(dir)
+        XCTAssertTrue(innerHooks(in: hooks, event: "PermissionRequest").contains {
+            ($0["command"] as? String) == "/usr/local/bin/user-codex-hook"
+        })
+
+        try writer.uninstall()
+        hooks = try hooksObject(dir)
+        XCTAssertEqual(
+            innerHooks(in: hooks, event: "PermissionRequest").compactMap { $0["command"] as? String },
+            ["/usr/local/bin/user-codex-hook"]
+        )
+    }
+
+    func testMutationRejectsUncertainHookShapesWithoutChangingBytes() throws {
+        let payloads = [
+            #"{"hooks":"custom"}"#,
+            #"{"hooks":{"PermissionRequest":{"hooks":[]}}}"#,
+            #"{"hooks":{"PermissionRequest":[{"hooks":"custom"}]}}"#,
+        ]
+
+        for payload in payloads {
+            for mutate in [
+                { (writer: CodexConfigWriter) in try writer.install(arguments: ["--tool", "codex"]) },
+                { (writer: CodexConfigWriter) in try writer.uninstall() },
+            ] {
+                let dir = try tempCodexDir()
+                let hooksURL = dir.appendingPathComponent("hooks.json")
+                let configURL = dir.appendingPathComponent("config.toml")
+                let originalHooks = Data(payload.utf8)
+                let originalConfig = Data("[features]\nhooks = true\n".utf8)
+                try originalHooks.write(to: hooksURL)
+                try originalConfig.write(to: configURL)
+                let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
+
+                XCTAssertThrowsError(try mutate(writer), "payload: \(payload)")
+                XCTAssertEqual(try Data(contentsOf: hooksURL), originalHooks, "payload: \(payload)")
+                XCTAssertEqual(try Data(contentsOf: configURL), originalConfig, "payload: \(payload)")
+            }
+        }
+    }
+
+    func testUninstallPreservesUnrelatedTopLevelHooksFileFields() throws {
+        let dir = try tempCodexDir()
+        let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
+        try writer.install(arguments: ["--tool", "codex"])
+        let hooksURL = dir.appendingPathComponent("hooks.json")
+        var root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: hooksURL)) as? [String: Any]
+        )
+        root["version"] = 1
+        try JSONSerialization.data(withJSONObject: root).write(to: hooksURL)
+
+        try writer.uninstall()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: hooksURL.path))
+        let remaining = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: hooksURL)) as? [String: Any]
+        )
+        XCTAssertEqual(remaining["version"] as? Int, 1)
+        XCTAssertNil(remaining["hooks"])
+    }
+
+    func testExactExecutableOwnershipHandlesApostropheAndPreservesWrapper() throws {
+        let apostrophePath = "/Users/O'Brien/Library/Application Support/VibePet/bin/VibePetHooks"
+        let dir = try tempCodexDir()
+        let hooksURL = dir.appendingPathComponent("hooks.json")
+        let wrapper = "/usr/local/bin/wrapper '\(apostrophePath)'"
+        try Data("""
+        {
+          "hooks": {
+            "PermissionRequest": [
+              { "hooks": [ { "type": "command", "command": "\(wrapper)" } ] }
+            ]
+          }
+        }
+        """.utf8).write(to: hooksURL)
+        let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: apostrophePath)
+
+        try writer.install(arguments: ["--tool", "codex"])
+        try writer.install(arguments: ["--tool", "codex"])
+
+        var hooks = try hooksObject(dir)
+        let installedCommands = innerHooks(in: hooks, event: "PermissionRequest")
+            .compactMap { $0["command"] as? String }
+        XCTAssertEqual(installedCommands.filter { $0 == wrapper }, [wrapper])
+        XCTAssertEqual(installedCommands.filter { $0 != wrapper }.count, 1)
+
+        try writer.uninstall()
+
+        hooks = try hooksObject(dir)
+        XCTAssertEqual(
+            innerHooks(in: hooks, event: "PermissionRequest").compactMap { $0["command"] as? String },
+            [wrapper]
+        )
+    }
+
     func testUninstallPreservesFeatureFlagWhenUserHooksRemain() throws {
         // The user has their own Codex hook; disabling the shared [features] flag on
         // uninstall would silently break it, so VibePet must leave the flag enabled.
@@ -149,8 +273,7 @@ final class CodexConfigWriterTests: XCTestCase {
         XCTAssertTrue(toml.contains("[mcp_servers.example]"))
     }
 
-    func testUninstallRemovesFeatureFlagWhenNoHooksRemain() throws {
-        // VibePet is the only hook present → uninstall fully cleans up, flag included.
+    func testUninstallWithoutOwnershipReceiptPreservesSharedFeatureFlag() throws {
         let dir = try tempCodexDir()
         let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
         try writer.install(arguments: ["--tool", "codex"])
@@ -158,12 +281,10 @@ final class CodexConfigWriterTests: XCTestCase {
         try writer.uninstall()
 
         let toml = try String(contentsOf: dir.appendingPathComponent("config.toml"), encoding: .utf8)
-        XCTAssertFalse(featureEnabled(toml, key: "hooks"), "managed feature flag removed when nothing else needs it")
+        XCTAssertTrue(featureEnabled(toml, key: "hooks"), "unknown ownership must preserve the shared feature")
     }
 
-    func testInstallMigratesLegacyKeyForwardWhenBothCouldExist() throws {
-        // A config already on the modern key must not accumulate the legacy one, and
-        // vice versa — only one flag should ever be present after install.
+    func testInstallPreservesMixedPreexistingFeatureKeys() throws {
         let dir = try tempCodexDir()
         try "[features]\ncodex_hooks = true\nhooks = true\n".write(
             to: dir.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8
@@ -175,7 +296,7 @@ final class CodexConfigWriterTests: XCTestCase {
         let lines = try String(contentsOf: dir.appendingPathComponent("config.toml"), encoding: .utf8)
             .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         XCTAssertTrue(lines.contains("hooks = true"), "modern key enabled")
-        XCTAssertFalse(lines.contains { $0.hasPrefix("codex_hooks") }, "legacy key migrated away")
+        XCTAssertTrue(lines.contains("codex_hooks = true"), "user-owned legacy key preserved")
     }
 
     func testInstallWritesLegacyKeyWhenExistingConfigUsesIt() throws {
@@ -196,20 +317,19 @@ final class CodexConfigWriterTests: XCTestCase {
         XCTAssertFalse(lines.contains("hooks = true"), "must not introduce the modern key for an old Codex")
     }
 
-    func testUninstallRemovesBothModernAndLegacyKeys() throws {
-        // A config carrying both keys (e.g. after a Codex upgrade) must end up clean.
+    func testUninstallPreservesPreexistingMixedFeatureKeys() throws {
         let dir = try tempCodexDir()
         try "[features]\nhooks = true\ncodex_hooks = true\n".write(
             to: dir.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8
         )
         let writer = CodexConfigWriter(codexDirectory: dir, hookBinaryPath: binaryPath)
-        try writer.install(arguments: ["--tool", "codex"])
+        let receipt = try writer.installWithReceipt(arguments: ["--tool", "codex"])
 
-        try writer.uninstall()
+        try writer.uninstall(receipt: receipt)
 
         let toml = try String(contentsOf: dir.appendingPathComponent("config.toml"), encoding: .utf8)
-        XCTAssertFalse(toml.contains("hooks = true"), "modern key removed")
-        XCTAssertFalse(toml.contains("codex_hooks = true"), "legacy key removed")
+        XCTAssertTrue(featureEnabled(toml, key: "hooks"), "preexisting modern feature is user-owned")
+        XCTAssertTrue(featureEnabled(toml, key: "codex_hooks"), "preexisting legacy feature is user-owned")
     }
 
     func testFeatureEnabledRecognizesEitherKey() {

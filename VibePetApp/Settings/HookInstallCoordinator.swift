@@ -11,14 +11,17 @@ final class HookInstallCoordinator: ObservableObject {
     @Published var lastError: PresentedError?
 
     private let installer: HookInstaller
-    private let hookBinarySource: URL
+    private let hookBinaryLocation: HooksBinaryLocation
 
     init(
         installer: HookInstaller = HookInstallCoordinator.defaultInstaller(),
-        hookBinarySource: URL = HookInstallCoordinator.bundledHookBinary()
+        hookBinarySource: URL? = nil,
+        hookBinaryLocation: HooksBinaryLocation? = nil
     ) {
         self.installer = installer
-        self.hookBinarySource = hookBinarySource
+        self.hookBinaryLocation = hookBinarySource.map(HooksBinaryLocation.found)
+            ?? hookBinaryLocation
+            ?? HookInstallCoordinator.bundledHookBinaryLocation()
         refresh()
     }
 
@@ -40,6 +43,7 @@ final class HookInstallCoordinator: ObservableObject {
     }
 
     func install(_ tool: ToolKind) {
+        guard let hookBinarySource = resolveHookBinarySource(for: tool) else { return }
         do {
             _ = try installer.install(tool: tool, hookBinarySource: hookBinarySource)
             lastError = nil
@@ -52,6 +56,7 @@ final class HookInstallCoordinator: ObservableObject {
     /// Re-establishes consistent on-disk state for a drifted install (forces a config
     /// rewrite, unlike the idempotent `install`).
     func repair(_ tool: ToolKind) {
+        guard let hookBinarySource = resolveHookBinarySource(for: tool) else { return }
         do {
             _ = try installer.repair(tool: tool, hookBinarySource: hookBinarySource)
             lastError = nil
@@ -84,15 +89,45 @@ final class HookInstallCoordinator: ObservableObject {
         ])
     }
 
-    /// The `VibePetHooks` shipped next to this executable (dev build or app bundle).
-    /// Uses `HooksBinaryLocator` to also cover sibling `Helpers/` and dev `.build`
-    /// layouts, falling back to the executable-adjacent path when nothing resolves.
-    static func bundledHookBinary() -> URL {
+    private func resolveHookBinarySource(for tool: ToolKind) -> URL? {
+        switch hookBinaryLocation {
+        case .found(let url):
+            return url
+        case .invalidExplicitOverride(let url):
+            lastError = ErrorPresenter.presentInstallFailure(
+                HookBinarySourceError.invalidExplicitOverride(url),
+                tool: tool
+            )
+        case .notFound(let attempted):
+            lastError = ErrorPresenter.presentInstallFailure(
+                HookBinarySourceError.notFound(attempted),
+                tool: tool
+            )
+        }
+        return nil
+    }
+
+    /// Resolves the checked `VibePetHooks` source next to this executable (dev build
+    /// or app bundle). Invalid explicit overrides remain errors and never fall back.
+    static func bundledHookBinaryLocation() -> HooksBinaryLocation {
         let executableDirectory = (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
             .resolvingSymlinksInPath()
             .deletingLastPathComponent()
-        return HooksBinaryLocator.locate(executableDirectory: executableDirectory)
-            ?? executableDirectory.appendingPathComponent("VibePetHooks", isDirectory: false)
+        return HooksBinaryLocator.locateResult(executableDirectory: executableDirectory)
+    }
+}
+
+private enum HookBinarySourceError: LocalizedError {
+    case invalidExplicitOverride(URL)
+    case notFound([URL])
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidExplicitOverride(let url):
+            "\(HooksBinaryLocator.environmentKey) is not an executable regular file: \(url.path)"
+        case .notFound(let attempted):
+            "VibePetHooks was not found; attempted: \(attempted.map(\.path).joined(separator: ", "))"
+        }
     }
 }
 
@@ -128,12 +163,16 @@ extension HookHealthReport.Issue {
             return localizer.text(.hookProgramMissing)
         case .binaryNotExecutable:
             return localizer.text(.hookProgramNotExecutable)
-        case .configMalformedJSON:
+        case .configMalformedJSON, .configMalformedTOML:
             return localizer.text(.hookConfigJSONBroken)
+        case .manifestMalformed, .manifestSettingsPathMismatch, .manifestHookSetMismatch:
+            return localizer.text(.hookManifestMissing)
         case .staleCommandPath:
             return localizer.text(.hookConfiguredPathInvalid)
-        case .managedHooksMissing:
+        case .managedHooksMissing, .managedHookKeyMissing, .codexToolArgumentMissing:
             return localizer.text(.hookEntryMissing)
+        case .binaryVersionMismatch:
+            return localizer.text(.hookConfiguredPathInvalid)
         case .orphanedInstall:
             return localizer.text(.hookManifestMissing)
         case .codexFeatureDisabled:

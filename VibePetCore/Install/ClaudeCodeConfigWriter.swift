@@ -27,9 +27,10 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
     private let hookBinaryPath: String
 
     /// Seconds Claude Code waits for the blocking `PermissionRequest` hook before killing it.
-    /// With no App-side decision countdown, this tool-side timeout is the finite
-    /// fail-open backstop for unanswered decisions.
-    public static let managedDecisionTimeout = 86_400
+    /// The native timeout is the final backstop above App and CLI deadlines.
+    public static let managedDecisionTimeout = Int(
+        HookDecisionBudget.nativeHookTimeout(for: .claudeCode)
+    )
 
     public init(configURL: URL? = nil, hookBinaryPath: String? = nil) {
         self.configURL = configURL ?? FileManager.default.homeDirectoryForCurrentUser
@@ -38,16 +39,16 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
     }
 
     public func install(arguments: [String]) throws {
-        var root = readRoot()
+        var root = try readRootForMutation()
         var hooks = (root["hooks"] as? [String: Any]) ?? [:]
         // Quote the binary path: Claude Code runs the command via `/bin/sh -c`, so a
         // path containing spaces (e.g. `.../Application Support/...`) would split and
         // fail to launch. Mirrors CodexConfigWriter's shell-quoting.
-        let command = ([Self.shellQuote(hookBinaryPath)] + arguments).joined(separator: " ")
+        let command = ([HookCommandShell.quote(hookBinaryPath)] + arguments).joined(separator: " ")
 
         for key in managedHookKeys + Self.legacyManagedHookKeys {
             var groups = (hooks[key] as? [[String: Any]]) ?? []
-            groups.removeAll { isVibePetGroup($0) } // drop any prior VibePet entry (idempotent)
+            groups = removingVibePetHooks(from: groups)
             guard managedHookKeys.contains(key) else {
                 if groups.isEmpty {
                     hooks.removeValue(forKey: key)
@@ -76,12 +77,12 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
 
     public func uninstall() throws {
         guard configExists() else { return }
-        var root = readRoot()
+        var root = try readRootForMutation()
         guard var hooks = root["hooks"] as? [String: Any] else { return }
 
         for key in managedHookKeys + Self.legacyManagedHookKeys {
-            guard var groups = hooks[key] as? [[String: Any]] else { continue }
-            groups.removeAll { isVibePetGroup($0) }
+            guard let existingGroups = hooks[key] as? [[String: Any]] else { continue }
+            let groups = removingVibePetHooks(from: existingGroups)
             if groups.isEmpty {
                 hooks.removeValue(forKey: key)
             } else {
@@ -94,26 +95,32 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
 
     // MARK: - Helpers
 
-    /// A matcher-group is VibePet's when any of its command hooks references the
-    /// stable binary path.
-    private func isVibePetGroup(_ group: [String: Any]) -> Bool {
-        let innerHooks = (group["hooks"] as? [[String: Any]]) ?? []
-        return innerHooks.contains { ($0["command"] as? String)?.contains(hookBinaryPath) == true }
-    }
-
-    /// Wraps a path in single quotes so `/bin/sh -c` treats it as one argument even
-    /// when it contains spaces.
-    private static func shellQuote(_ string: String) -> String {
-        "'" + string.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private func readRoot() -> [String: Any] {
-        guard
-            let data = try? Data(contentsOf: configURL),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return [:]
+    private func removingVibePetHooks(from groups: [[String: Any]]) -> [[String: Any]] {
+        groups.compactMap { group in
+            guard let hooks = group["hooks"] as? [[String: Any]] else { return group }
+            let remaining = hooks.filter { hook in
+                guard let command = hook["command"] as? String else { return true }
+                return !HookCommandShell.invokes(command, executablePath: hookBinaryPath)
+            }
+            guard !remaining.isEmpty else { return nil }
+            var updated = group
+            updated["hooks"] = remaining
+            return updated
         }
+    }
+
+    private func readRootForMutation() throws -> [String: Any] {
+        guard FileManager.default.fileExists(atPath: configURL.path) else { return [:] }
+        let data: Data
+        do {
+            data = try Data(contentsOf: configURL)
+        } catch {
+            throw ToolConfigMutationError.unreadable(path: configURL.path)
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ToolConfigMutationError.malformedJSON(path: configURL.path)
+        }
+        _ = try HookConfigurationJSON.validatedHooks(in: object, path: configURL.path)
         return object
     }
 
@@ -127,5 +134,91 @@ public struct ClaudeCodeConfigWriter: ToolConfigWriter {
             options: [.prettyPrinted, .sortedKeys]
         )
         try data.write(to: configURL, options: .atomic)
+    }
+}
+
+enum HookConfigurationJSON {
+    static func validatedHooks(in root: [String: Any], path: String) throws -> [String: Any] {
+        guard let rawHooks = root["hooks"] else { return [:] }
+        guard let hooks = rawHooks as? [String: Any] else {
+            throw ToolConfigMutationError.malformedJSON(path: path)
+        }
+        for value in hooks.values {
+            guard let groups = value as? [[String: Any]] else {
+                throw ToolConfigMutationError.malformedJSON(path: path)
+            }
+            for group in groups where group["hooks"] as? [[String: Any]] == nil {
+                throw ToolConfigMutationError.malformedJSON(path: path)
+            }
+        }
+        return hooks
+    }
+}
+
+enum HookCommandShell {
+    private enum QuoteState {
+        case unquoted
+        case single
+        case double
+    }
+
+    static func quote(_ string: String) -> String {
+        "'" + string.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    static func invokes(_ command: String, executablePath: String) -> Bool {
+        firstArgument(in: command) == executablePath
+    }
+
+    static func firstArgument(in command: String) -> String? {
+        let characters = Array(command)
+        var index = 0
+        while index < characters.count, characters[index].isWhitespace {
+            index += 1
+        }
+        guard index < characters.count else { return nil }
+
+        var state = QuoteState.unquoted
+        var argument = ""
+        while index < characters.count {
+            let character = characters[index]
+            switch state {
+            case .unquoted:
+                if character.isWhitespace {
+                    return argument.isEmpty ? nil : argument
+                }
+                if character == "'" {
+                    state = .single
+                } else if character == "\"" {
+                    state = .double
+                } else if character == "\\" {
+                    index += 1
+                    guard index < characters.count else { return nil }
+                    argument.append(characters[index])
+                } else {
+                    argument.append(character)
+                }
+            case .single:
+                if character == "'" {
+                    state = .unquoted
+                } else {
+                    argument.append(character)
+                }
+            case .double:
+                if character == "\"" {
+                    state = .unquoted
+                } else if character == "\\" {
+                    index += 1
+                    guard index < characters.count else { return nil }
+                    argument.append(characters[index])
+                } else {
+                    argument.append(character)
+                }
+            }
+            index += 1
+        }
+
+        guard state == .unquoted, !argument.isEmpty else { return nil }
+        return argument
     }
 }

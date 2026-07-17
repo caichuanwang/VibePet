@@ -68,6 +68,11 @@ public enum AgentEvent: Equatable, Sendable {
         }
     }
 
+    public var isSessionStart: Bool {
+        if case .sessionStarted = self { return true }
+        return false
+    }
+
     public func rekeyed(to newSessionID: String) -> AgentEvent {
         switch self {
         case let .sessionStarted(_, timestamp, title, tool, summary, jumpTarget):

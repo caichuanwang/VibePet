@@ -56,28 +56,43 @@ To make VibePet behave like a fresh first launch, clear the app's persisted stat
 
 ## Reference Project: open-vibe-island
 
-A full clone of **open-vibe-island** (Octane0411/open-vibe-island) lives at `open-vibe-island/` in the repo root. VibePet is essentially "open-vibe-island's architecture + a desktop pet", so it is the primary architecture reference. **You may read its source freely** . It is acceptable to borrow architecture, data flow, naming inspiration, tests, edge-case handling, and implementation strategy from open-vibe-island as long as the result is adapted into VibePet's own models, scope, and naming rather than pasted verbatim or copied in large unchanged blocks. Do not build or test it as part of VibePet — it is a self-contained nested package (its own `Package.swift` + `.git`) that the root `swift build`/`swift test` does not include.
+The primary upstream architecture reference is **[Octane0411/open-vibe-island](https://github.com/Octane0411/open-vibe-island)**. A full clone lives at `open-vibe-island/` in the repository root, so use the local clone for source-level investigation and the GitHub URL for upstream history or newer changes. VibePet is broadly "open-vibe-island's agent-session architecture + a desktop pet," and agents may freely study its source, tests, documentation, data flow, naming, and edge-case handling.
 
-**Its shape mirrors VibePet 1:1** — single Swift package, four targets:
+Adapt ideas into VibePet's own models, supported agents, product scope, and naming. Do not paste large unchanged blocks, import entire subsystems, or build/test the nested package as part of VibePet; `open-vibe-island/` is a self-contained Swift package with its own `Package.swift` and `.git`.
+
+**Target correspondence:**
 
 | open-vibe-island target | VibePet equivalent | Role |
 |---|---|---|
-| `OpenIslandCore` | `VibePetCore` | Models, Unix-socket bridge transport (NDJSON), hook installers, session reducer |
-| `OpenIslandApp` | `VibePetApp` | SwiftUI/AppKit shell; `AppModel` is the central `@Observable` state owner |
-| `OpenIslandHooks` | `VibePetHooks` | Lightweight hook CLI: stdin payload → socket → app; blocking stdout only on a `PreToolUse` deny |
-| `OpenIslandSetup` | `VibePetSetup` | Installer CLI for tool config (`~/.codex`, `~/.claude`) |
+| `OpenIslandCore` | `VibePetCore` | Models, event reduction, Unix-socket bridge transport, hook adapters, and installers |
+| `OpenIslandApp` | `VibePetApp` | SwiftUI/AppKit shell with a central observable application-state owner |
+| `OpenIslandHooks` | `VibePetHooks` | Lightweight hook CLI: stdin payload → socket → app, with blocking stdout only when the native tool requires a decision |
+| `OpenIslandSetup` | `VibePetSetup` | Installer CLI for managed Claude Code and Codex configuration |
 
-**Core abstractions VibePet's 0.2 session model is drawn from** (`open-vibe-island/Sources/OpenIslandCore/`):
-- `AgentSession.swift` — `SessionPhase` (exactly `running` / `waitingForApproval` / `waitingForAnswer` / `completed`, with `requiresAttention`), `AgentSession`, and `JumpTarget`.
-- `AgentEvent.swift` — the `AgentEvent` enum (`sessionStarted` / `activityUpdated` / `permissionRequested` / `questionAsked` / `sessionCompleted` / `jumpTargetUpdated` / `actionableStateResolved`, plus per-agent metadata cases VibePet does not need).
-- `SessionState.swift` — `SessionState.apply(_:)` pure reducer over `sessionsByID`, with derived counts (`runningCount`, `attentionCount`, `liveSessionCount`, …).
-- `BridgeServer.swift` / `BridgeTransport.swift` — socket server + newline-delimited JSON envelope codec.
+**Portable ideas worth adapting:**
 
-**Where to look, by VibePet sub-project:**
-- Sub-project 1 (session model + hooks): the four Core files above, plus `ClaudeHooks.swift` / `CodexHooks.swift` (payload → event) and `*HookInstaller.swift` / `*HookInstallationManager.swift` (config writing). Design notes: `open-vibe-island/docs/architecture.md`, `docs/hooks.md`, `docs/session-state-refactor.md`.
-- Sub-project 3 (terminal jump-back): `Sources/OpenIslandApp/TerminalJumpService.swift`, `TerminalJumpTargetResolver.swift`, `ForegroundTerminalSessionProbe.swift`.
+- **Strict target boundaries:** keep models, codecs, reducers, persistence contracts, and installer logic UI-independent in Core; keep AppKit/SwiftUI and terminal automation in the app target; keep the hook executable small and fail-open.
+- **Normalized event model and pure reducer:** translate Claude Code and Codex payloads into a small shared `AgentEvent` vocabulary, then update `sessionsByID` through a deterministic `SessionState.apply(_:)`. Derive running/attention/live counts from state instead of maintaining duplicate counters.
+- **Explicit session phases and actionable payloads:** model running, approval, question, and completed states directly, with permission/question data attached to the session and cleared by an explicit resolution event. Preserve per-agent metadata only where VibePet actually needs it.
+- **NDJSON Unix-socket bridge:** reuse the envelope/command/response separation, newline-delimited framing, stale-socket handling, restricted socket permissions, bounded reads, SIGPIPE protection, and request-specific timeouts. Every decode, connect, timeout, and malformed-input failure must remain fail-open.
+- **Thin hook adapters:** keep each adapter responsible only for decoding its native payload, enriching runtime context, mapping it to shared events, and serializing the one response shape the tool expects. Unknown hook events should be ignored safely rather than becoming fatal.
+- **Non-destructive, idempotent installation:** merge only VibePet-managed hook entries, preserve unrelated user configuration, maintain enough manifest/backup information for uninstall, quote the stable helper path correctly, and verify install/uninstall behavior with temporary-file unit tests rather than touching real user config.
+- **Capture precise jump context early:** record terminal app, session/tab identifier, TTY, pane title, working directory, and process context at hook time when available. Separate target resolution from the actual jump service, prefer precise identifiers before heuristics, and retain a safe app/cwd fallback.
+- **Central app state with isolated effects:** use the app model as the single observable owner of session and UI-facing state, while keeping bridge callbacks, persistence, terminal probing, and other side effects behind focused services or injectable closures.
+- **Lifecycle reconciliation without flicker:** distinguish hook-managed lifecycle from process-discovered liveness, tolerate short observation gaps, clean up pending/actionable state on completion, and make late or duplicate events idempotent.
+- **Deterministic test strategy:** adapt fixture-based payload tests, reducer transition tables, bridge codec/round-trip tests, timeout and app-not-running fail-open tests, installer merge/uninstall tests, and terminal-jump tests with injected system runners. Prefer regression tests for malformed input, stale sockets, duplicate events, and user-config preservation.
 
-**Scope caveats — adapt, do not clone wholesale:** open-vibe-island supports ~10 agents and 15+ terminals/IDEs, a notch overlay UI, Sparkle auto-update, Apple Watch relay, and keystroke/AX injection. VibePet stays at the MVP surface (Claude Code + Codex), has no notch UI, and adds the Codex-spritesheet pet instead. Take the architecture, event/session patterns, installer lessons, and precise-jump-at-hook-time insight when useful; leave the extra agents, terminals, and UI surface out unless a VibePet spec asks for them. The important boundary is avoiding direct copy-paste or broad unmodified imports, not avoiding the reference project.
+
+**Useful source entry points:**
+
+- Session model: `open-vibe-island/Sources/OpenIslandCore/AgentSession.swift`, `AgentEvent.swift`, and `SessionState.swift`.
+- Bridge transport: `open-vibe-island/Sources/OpenIslandCore/BridgeServer.swift` and `BridgeTransport.swift`.
+- Hook translation and installation: `ClaudeHooks.swift`, `CodexHooks.swift`, `*HookInstaller.swift`, and `*HookInstallationManager.swift`.
+- Hook CLI behavior: `open-vibe-island/Sources/OpenIslandHooks/OpenIslandHooksCLI.swift`.
+- Terminal jump-back: `open-vibe-island/Sources/OpenIslandApp/TerminalJumpService.swift`, `TerminalJumpTargetResolver.swift`, and `ForegroundTerminalSessionProbe.swift`.
+- Design notes and tests: `open-vibe-island/docs/architecture.md`, `docs/hooks.md`, `docs/session-state-refactor.md`, and the matching suites under `open-vibe-island/Tests/`.
+
+**Scope caveats — adapt, do not clone wholesale:** open-vibe-island supports many agents and terminals/IDEs plus a notch overlay, Sparkle updates, Apple Watch relay, process-discovery machinery, keystroke/Accessibility injection, and other surfaces outside VibePet's current scope. VibePet stays focused on Claude Code + Codex, a desktop pet, local-only operation, and the integrations explicitly required by current specs. Do not add extra agents, network services, notch UI, updater/watch features, broad process scanning, or AX/keystroke automation merely because the reference implements them. Preserve VibePet's stable helper path, fail-open behavior, local-first privacy boundary, and spritesheet-pet architecture.
 
 # AGENTS.md
 

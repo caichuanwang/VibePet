@@ -40,16 +40,50 @@ final class HookHealthCheckTests: XCTestCase {
         XCTAssertTrue(report.errors.contains { !$0.isAutoRepairable }, "malformed user JSON is not auto-repairable")
     }
 
-    func testDetectsStaleCommandPath() throws {
+    func testDetectsStructurallyInvalidClaudeHooksAsNonRepairable() throws {
+        let env = try Env()
+        try env.installManagedBinary()
+        try Data(#"{"hooks":"custom"}"#.utf8).write(to: env.claudeConfig)
+
+        let report = env.checkClaude()
+
+        XCTAssertTrue(report.issues.contains { if case .configMalformedJSON = $0 { return true } else { return false } })
+        XCTAssertFalse(report.issues.contains { if case .managedHooksMissing = $0 { return true } else { return false } })
+        XCTAssertFalse(report.issues.contains { if case .managedHookKeyMissing = $0 { return true } else { return false } })
+        XCTAssertTrue(report.errors.allSatisfy { !$0.isAutoRepairable })
+    }
+
+    func testDetectsStructurallyInvalidCodexHooksAsNonRepairable() throws {
+        let env = try Env()
+        try env.installManagedBinary()
+        try FileManager.default.createDirectory(at: env.codexDir, withIntermediateDirectories: true)
+        try "[features]\nhooks = true\n".write(to: env.codexConfig, atomically: true, encoding: .utf8)
+        try Data(#"{"hooks":{"PermissionRequest":{"hooks":[]}}}"#.utf8)
+            .write(to: env.codexDir.appendingPathComponent("hooks.json"))
+
+        let report = HookHealthCheck.check(
+            tool: .codex,
+            writer: env.codexWriter,
+            managedBinaryURL: env.managedBinary,
+            recordedInstalled: true
+        )
+
+        XCTAssertTrue(report.issues.contains { if case .configMalformedJSON = $0 { return true } else { return false } })
+        XCTAssertFalse(report.issues.contains { if case .managedHooksMissing = $0 { return true } else { return false } })
+        XCTAssertFalse(report.issues.contains { if case .managedHookKeyMissing = $0 { return true } else { return false } })
+        XCTAssertTrue(report.errors.allSatisfy { !$0.isAutoRepairable })
+    }
+
+    func testDetectsMissingManagedBinaryWithoutMisclassifyingCommandPath() throws {
         let env = try Env()
         try env.installManagedBinary()
         try env.claudeWriter.install(arguments: [])
-        // Binary moves away after install → recorded command path is now stale.
         try FileManager.default.removeItem(at: env.managedBinary)
 
         let report = env.checkClaude()
 
-        XCTAssertTrue(report.issues.contains { if case .staleCommandPath = $0 { return true } else { return false } })
+        XCTAssertTrue(report.issues.contains { if case .binaryNotFound = $0 { return true } else { return false } })
+        XCTAssertFalse(report.issues.contains { if case .staleCommandPath = $0 { return true } else { return false } })
     }
 
     func testDetectsManagedHooksMissing() throws {
@@ -114,6 +148,25 @@ final class HookHealthCheckTests: XCTestCase {
         XCTAssertTrue(report.issues.contains { if case .codexFeatureDisabled = $0 { return true } else { return false } })
     }
 
+    func testDetectsMissingCodexConfigAsDisabledFeature() throws {
+        let env = try Env()
+        try env.installManagedBinary()
+        try env.codexWriter.install(arguments: ["--tool", "codex"])
+        try FileManager.default.removeItem(at: env.codexConfig)
+
+        let report = HookHealthCheck.check(
+            tool: .codex,
+            writer: env.codexWriter,
+            managedBinaryURL: env.managedBinary,
+            recordedInstalled: true
+        )
+
+        XCTAssertTrue(report.issues.contains {
+            if case .codexFeatureDisabled(configPath: env.codexConfig.path) = $0 { return true }
+            return false
+        })
+    }
+
     func testRecordedBinaryPathHandlesQuotingAndSpaces() {
         // Codex: shell-quoted path + args.
         XCTAssertEqual(
@@ -125,6 +178,35 @@ final class HookHealthCheckTests: XCTestCase {
             HookHealthCheck.recordedBinaryPath(from: "/Users/dev/Library/Application Support/VibePet/bin/VibePetHooks"),
             "/Users/dev/Library/Application Support/VibePet/bin/VibePetHooks"
         )
+        XCTAssertEqual(
+            HookHealthCheck.recordedBinaryPath(
+                from: #"'/Users/O'\''Brien/Library/Application Support/VibePet/bin/VibePetHooks' --tool codex"#
+            ),
+            "/Users/O'Brien/Library/Application Support/VibePet/bin/VibePetHooks"
+        )
+    }
+
+    func testWrapperReferencingManagedPathIsNotClassifiedAsVibePetCommand() throws {
+        let env = try Env()
+        try env.installManagedBinary()
+        let wrapper = "/usr/local/bin/wrapper '\(env.managedBinary.path)'"
+        try Data("""
+        {"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"\(wrapper)"}]}]}}
+        """.utf8).write(to: env.claudeConfig)
+
+        let report = HookHealthCheck.check(
+            tool: .claudeCode,
+            writer: env.claudeWriter,
+            managedBinaryURL: env.managedBinary,
+            recordedInstalled: false
+        )
+
+        XCTAssertFalse(report.issues.contains { if case .orphanedInstall = $0 { return true } else { return false } })
+        XCTAssertFalse(report.issues.contains { if case .staleCommandPath = $0 { return true } else { return false } })
+        XCTAssertTrue(report.notices.contains {
+            if case .otherHooksDetected(let names) = $0 { return names.contains("wrapper") }
+            return false
+        })
     }
 
     // MARK: - Harness

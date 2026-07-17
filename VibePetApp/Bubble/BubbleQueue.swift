@@ -11,6 +11,10 @@ struct BubbleQueue<Item: Identifiable> where Item.ID == UUID {
     var isEmpty: Bool { items.isEmpty }
     var count: Int { items.count }
 
+    func contains(id: UUID) -> Bool {
+        items.contains { $0.id == id }
+    }
+
     /// Number of cards waiting behind the presented (front) one.
     var pendingCount: Int { max(0, items.count - 1) }
 
@@ -24,6 +28,13 @@ struct BubbleQueue<Item: Identifiable> where Item.ID == UUID {
     mutating func removeFront(id: UUID) -> Item? {
         guard let first = items.first, first.id == id else { return nil }
         return items.removeFirst()
+    }
+
+    /// Removes a queued request by identity without disturbing the FIFO front.
+    @discardableResult
+    mutating func remove(id: UUID) -> Item? {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return nil }
+        return items.remove(at: index)
     }
 
     /// Drains the whole queue (e.g. fail-open when the pet is hidden).

@@ -1,5 +1,28 @@
 import Foundation
 
+public enum HookDecisionBudget {
+    public static func nativeHookTimeout(for tool: ToolKind) -> TimeInterval {
+        switch tool {
+        case .claudeCode: 86_400
+        case .codex: 3_600
+        }
+    }
+
+    public static func cliReadTimeout(for tool: ToolKind) -> TimeInterval {
+        switch tool {
+        case .claudeCode: 86_390
+        case .codex: 3_590
+        }
+    }
+
+    public static func appDecisionTimeout(for tool: ToolKind) -> TimeInterval {
+        switch tool {
+        case .claudeCode: 86_385
+        case .codex: 3_585
+        }
+    }
+}
+
 /// Selects how the `VibePetHooks` CLI is invoked: which `ToolAdapter` to use and
 /// where the event JSON comes from. Codex registers two surfaces pointing at the
 /// same binary — `PermissionRequest` hooks (JSON on stdin) and the `notify` program

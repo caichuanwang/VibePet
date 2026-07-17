@@ -49,7 +49,7 @@ let supportRoot = environment["VIBEPET_SUPPORT_DIR"].map { URL(fileURLWithPath: 
 
 let client = BridgeClient(
     socketPath: SocketPath(applicationSupportRoot: supportRoot),
-    readTimeout: TimeInterval(ClaudeCodeConfigWriter.managedDecisionTimeout)
+    readTimeout: HookDecisionBudget.cliReadTimeout(for: adapter.tool)
 )
 let runtime = HookRuntime(adapter: adapter, client: client, log: debugLog)
 

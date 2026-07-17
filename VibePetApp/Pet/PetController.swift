@@ -21,7 +21,9 @@ final class PetController {
     /// How long the greeting state lasts before auto-returning to idle. Mirrors the
     /// `PetView` visual animation length; injectable so tests don't wait in realtime.
     private let greetDuration: TimeInterval
+    private let decisionTimeoutProvider: @Sendable (ToolKind) -> TimeInterval
     private var greetEndTask: Task<Void, Never>?
+    private var decisionTimeoutTasks: [UUID: Task<Void, Never>] = [:]
 
     /// FIFO of pending approvals; the front is the presented card. Earliest arrival
     /// is on top (technical design §5.3.5). The queue lives here so concurrent
@@ -36,7 +38,7 @@ final class PetController {
     private var frontDashboardCard: SessionDashboardCard?
     private var activeNotificationSessionID: String?
     private var activeNotificationSource: SourceInfo?
-    private var sessionStateSnapshot = SessionState()
+    private(set) var sessionStateSnapshot = SessionState()
 
     /// Notifications that arrived while a decision was active (decide > notify):
     /// they accumulate as a badge instead of clobbering the approval card.
@@ -45,6 +47,9 @@ final class PetController {
     init(
         surface: PetSurface,
         greetDuration: TimeInterval = PetAnimations.greetDuration,
+        decisionTimeoutProvider: @escaping @Sendable (ToolKind) -> TimeInterval = {
+            HookDecisionBudget.appDecisionTimeout(for: $0)
+        },
         openDashboard: @escaping () -> Void = {},
         terminalJump: @escaping (JumpTarget) -> Void = { target in
             try? TerminalJumpService().jump(to: target)
@@ -52,6 +57,7 @@ final class PetController {
     ) {
         self.surface = surface
         self.greetDuration = greetDuration
+        self.decisionTimeoutProvider = decisionTimeoutProvider
         self.openDashboard = openDashboard
         self.terminalJump = terminalJump
     }
@@ -129,22 +135,29 @@ final class PetController {
         )
     }
 
-    func sync(with sessionState: SessionState) {
+    @discardableResult
+    func sync(
+        with sessionState: SessionState,
+        activityOverride: SessionPetActivity? = nil
+    ) -> Bool {
         sessionStateSnapshot = sessionState
-        switch sessionState.derivedPetActivity {
+        switch activityOverride ?? sessionState.derivedPetActivity {
         case .deciding:
             machine.beginDecision()
         case .greeting:
-            _ = greet()
-            return
+            return greet()
         case .idle:
             if decisions.isEmpty, machine.state != .notify {
                 machine.bubbleDismissed()
             }
         }
         surface.renderPet(asset: activeAsset, activity: activity(for: sessionState.petVisualState))
+        return false
     }
 
+}
+
+extension PetController {
     /// Presents an approval bubble and suspends until the user decides. Called off the main actor by `BridgeServerHost`
     /// for response-bearing envelopes; the returned `BridgeResponse` is paired back
     /// to the request by `requestId` upstream. Concurrent calls are queued FIFO so
@@ -155,16 +168,58 @@ final class PetController {
             return .defer
         }
 
+        guard !decisions.contains(id: envelope.requestId) else {
+            return .defer
+        }
+
         return await withCheckedContinuation { continuation in
             decisions.enqueue(
                 PendingDecision(envelope: envelope, continuation: continuation)
             )
+            scheduleDecisionTimeout(for: envelope)
             if decisions.count == 1 {
                 presentFrontDecision()
             } else {
                 surface.updatePendingCount(decisions.pendingCount)
                 surface.updateDashboardContent()
             }
+        }
+    }
+
+    /// Fails open one request without disturbing a different FIFO front. Used by
+    /// peer disconnect and app shutdown as well as the per-tool decision deadline.
+    func cancelDecision(requestId: UUID) {
+        let wasFront = decisions.front?.id == requestId
+        guard let pending = decisions.remove(id: requestId) else { return }
+        decisionTimeoutTasks.removeValue(forKey: requestId)?.cancel()
+        pending.continuation.resume(returning: .defer)
+
+        if wasFront {
+            frontDecisionRenderer = nil
+            frontDashboardCard = nil
+            surface.dismissApproval()
+            presentFrontDecision()
+        } else {
+            surface.updatePendingCount(decisions.pendingCount)
+            surface.updateDashboardContent()
+        }
+    }
+
+    func cancelAllDecisions() {
+        failOpenAllDecisions()
+    }
+
+    private func scheduleDecisionTimeout(for envelope: BridgeEnvelope) {
+        let requestId = envelope.requestId
+        let configuredTimeout = decisionTimeoutProvider(envelope.source.tool)
+        let timeout = configuredTimeout.isFinite ? max(0, configuredTimeout) : 0
+        let maximumSeconds = TimeInterval(UInt64.max) / 1_000_000_000
+        let nanoseconds = UInt64(min(timeout, maximumSeconds) * 1_000_000_000)
+        decisionTimeoutTasks[requestId]?.cancel()
+        decisionTimeoutTasks[requestId] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !Task.isCancelled else { return }
+            self?.cancelDecision(requestId: requestId)
         }
     }
 
@@ -217,82 +272,96 @@ final class PetController {
 
         switch front.envelope.content {
         case let .approval(approval):
-            frontDecisionRenderer = { [weak self, terminalJump] in
-                if let cached = self?.frontDashboardCard {
-                    return cached
-                }
-                let presentation = ApprovalPresentation(pendingCount: self?.decisions.pendingCount ?? 0)
-                let card = SessionDashboardCard(
-                    id: front.id.uuidString,
-                    view: AnyView(ApprovalCard(
-                        content: approval,
-                        source: front.envelope.source,
-                        tailEdge: .bottom,
-                        tailOffsetX: 40,
-                        presentation: presentation,
-                        onJump: terminalJump,
-                        onDecision: onDecision
-                    )),
-                    resolve: onDecision
-                )
-                self?.frontDashboardCard = card
-                return card
-            }
-            if !selectedDashboardMatches(source: front.envelope.source) {
-                surface.presentApproval(
-                    content: approval,
-                    source: front.envelope.source,
-                    placement: placement,
-                    pendingCount: decisions.pendingCount,
-                    onJump: terminalJump,
-                    onDecision: onDecision
-                )
-            } else {
-                surface.dismissApproval()
-            }
+            presentApprovalDecision(approval, front: front, placement: placement, onDecision: onDecision)
         case let .question(question):
-            let conversationContext = questionConversationContext(for: front.envelope.source)
-            frontDecisionRenderer = { [weak self, terminalJump] in
-                if let cached = self?.frontDashboardCard {
-                    return cached
-                }
-                let presentation = ApprovalPresentation(pendingCount: self?.decisions.pendingCount ?? 0)
-                let card = SessionDashboardCard(
-                    id: front.id.uuidString,
-                    view: AnyView(QuestionCard(
-                        content: question,
-                        source: front.envelope.source,
-                        conversationContext: conversationContext,
-                        tailEdge: .bottom,
-                        tailOffsetX: 40,
-                        presentation: presentation,
-                        onJump: terminalJump,
-                        onAnswer: onDecision
-                    )),
-                    resolve: onDecision
-                )
-                self?.frontDashboardCard = card
-                return card
-            }
-            if !selectedDashboardMatches(source: front.envelope.source) {
-                surface.presentQuestion(
-                    content: question,
-                    source: front.envelope.source,
-                    conversationContext: conversationContext,
-                    placement: placement,
-                    pendingCount: decisions.pendingCount,
-                    onJump: terminalJump,
-                    onAnswer: onDecision
-                )
-            } else {
-                surface.dismissApproval()
-            }
+            presentQuestionDecision(question, front: front, placement: placement, onDecision: onDecision)
         case .completion, .status:
             // Non-interactive content never enters the decision queue (guarded by
             // `requestDecision`); fail open defensively if it ever does.
             resolveDecision(requestId: front.id, with: .defer)
         }
         surface.updateDashboardContent()
+    }
+
+    private func presentApprovalDecision(
+        _ approval: ApprovalContent,
+        front: PendingDecision,
+        placement: BubbleAnchor.Placement,
+        onDecision: @escaping (BridgeResponse) -> Void
+    ) {
+        frontDecisionRenderer = { [weak self, terminalJump] in
+            if let cached = self?.frontDashboardCard { return cached }
+            let presentation = ApprovalPresentation(pendingCount: self?.decisions.pendingCount ?? 0)
+            let card = SessionDashboardCard(
+                id: front.id.uuidString,
+                view: AnyView(ApprovalCard(
+                    content: approval,
+                    source: front.envelope.source,
+                    tailEdge: .bottom,
+                    tailOffsetX: 40,
+                    presentation: presentation,
+                    onJump: terminalJump,
+                    onDecision: onDecision
+                )),
+                resolve: onDecision
+            )
+            self?.frontDashboardCard = card
+            return card
+        }
+        guard !selectedDashboardMatches(source: front.envelope.source) else {
+            surface.dismissApproval()
+            return
+        }
+        surface.presentApproval(
+            content: approval,
+            source: front.envelope.source,
+            placement: placement,
+            pendingCount: decisions.pendingCount,
+            onJump: terminalJump,
+            onDecision: onDecision
+        )
+    }
+
+    private func presentQuestionDecision(
+        _ question: QuestionContent,
+        front: PendingDecision,
+        placement: BubbleAnchor.Placement,
+        onDecision: @escaping (BridgeResponse) -> Void
+    ) {
+        let conversationContext = questionConversationContext(for: front.envelope.source)
+        frontDecisionRenderer = { [weak self, terminalJump] in
+            if let cached = self?.frontDashboardCard { return cached }
+            let presentation = ApprovalPresentation(pendingCount: self?.decisions.pendingCount ?? 0)
+            let card = SessionDashboardCard(
+                id: front.id.uuidString,
+                view: AnyView(QuestionCard(
+                    content: question,
+                    source: front.envelope.source,
+                    conversationContext: conversationContext,
+                    tailEdge: .bottom,
+                    tailOffsetX: 40,
+                    presentation: presentation,
+                    onJump: terminalJump,
+                    onAnswer: onDecision
+                )),
+                resolve: onDecision
+            )
+            self?.frontDashboardCard = card
+            return card
+        }
+        guard !selectedDashboardMatches(source: front.envelope.source) else {
+            surface.dismissApproval()
+            return
+        }
+        surface.presentQuestion(
+            content: question,
+            source: front.envelope.source,
+            conversationContext: conversationContext,
+            placement: placement,
+            pendingCount: decisions.pendingCount,
+            onJump: terminalJump,
+            onAnswer: onDecision
+        )
     }
 
     /// Resolves the front decision iff `requestId` still matches it, so a duplicate
@@ -302,6 +371,7 @@ final class PetController {
         guard let front = decisions.removeFront(id: requestId) else {
             return
         }
+        decisionTimeoutTasks.removeValue(forKey: requestId)?.cancel()
         front.continuation.resume(returning: response)
         frontDecisionRenderer = nil
         frontDashboardCard = nil
@@ -311,8 +381,13 @@ final class PetController {
 
     private func failOpenAllDecisions() {
         let pending = decisions.drain()
+        let timeoutTasks = Array(decisionTimeoutTasks.values)
+        decisionTimeoutTasks.removeAll()
+        timeoutTasks.forEach { $0.cancel() }
         frontDecisionRenderer = nil
         frontDashboardCard = nil
+        notificationBadge = 0
+        surface.updateNotificationBadge(0)
         surface.updateDashboardContent()
         for item in pending {
             item.continuation.resume(returning: .defer)
