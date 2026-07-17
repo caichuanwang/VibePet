@@ -38,4 +38,46 @@ final class HookInvocationTests: XCTestCase {
         let data = HookInvocation.eventData(arguments: ["VibePetHooks", "--tool", "codex"], stdin: stdin)
         XCTAssertEqual(data, stdin)
     }
+
+    func testClaudeDecisionBudgetLeavesMarginsBetweenAppCLIAndTool() {
+        let responseMargin: TimeInterval = 1
+        let connectTimeout: TimeInterval = 2
+        let processMargin: TimeInterval = 1
+        XCTAssertEqual(HookDecisionBudget.appDecisionTimeout(for: .claudeCode), 86_385)
+        XCTAssertEqual(HookDecisionBudget.cliReadTimeout(for: .claudeCode), 86_390)
+        XCTAssertEqual(HookDecisionBudget.nativeHookTimeout(for: .claudeCode), 86_400)
+        XCTAssertEqual(
+            ClaudeCodeConfigWriter.managedDecisionTimeout,
+            Int(HookDecisionBudget.nativeHookTimeout(for: .claudeCode))
+        )
+        XCTAssertLessThan(
+            HookDecisionBudget.appDecisionTimeout(for: .claudeCode) + responseMargin,
+            HookDecisionBudget.cliReadTimeout(for: .claudeCode)
+        )
+        XCTAssertLessThan(
+            connectTimeout + HookDecisionBudget.cliReadTimeout(for: .claudeCode) + processMargin,
+            HookDecisionBudget.nativeHookTimeout(for: .claudeCode)
+        )
+    }
+
+    func testCodexDecisionBudgetLeavesMarginsBetweenAppCLIAndTool() {
+        let responseMargin: TimeInterval = 1
+        let connectTimeout: TimeInterval = 2
+        let processMargin: TimeInterval = 1
+        XCTAssertEqual(HookDecisionBudget.appDecisionTimeout(for: .codex), 3_585)
+        XCTAssertEqual(HookDecisionBudget.cliReadTimeout(for: .codex), 3_590)
+        XCTAssertEqual(HookDecisionBudget.nativeHookTimeout(for: .codex), 3_600)
+        XCTAssertEqual(
+            CodexConfigWriter.permissionTimeout,
+            Int(HookDecisionBudget.nativeHookTimeout(for: .codex))
+        )
+        XCTAssertLessThan(
+            HookDecisionBudget.appDecisionTimeout(for: .codex) + responseMargin,
+            HookDecisionBudget.cliReadTimeout(for: .codex)
+        )
+        XCTAssertLessThan(
+            connectTimeout + HookDecisionBudget.cliReadTimeout(for: .codex) + processMargin,
+            HookDecisionBudget.nativeHookTimeout(for: .codex)
+        )
+    }
 }

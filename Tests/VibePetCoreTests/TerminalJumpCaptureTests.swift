@@ -47,11 +47,12 @@ final class TerminalJumpCaptureTests: XCTestCase {
         var locatedApps: [String] = []
         let capture = TerminalJumpCapture(
             currentTTYProvider: { "/dev/ttys001" },
-            terminalLocator: { app in
+            terminalLocator: { app, tty in
                 locatedApps.append(app)
+                XCTAssertEqual(tty, "/dev/ttys001")
                 return TerminalJumpCapture.LocatorSnapshot(
                     sessionID: "iterm-session",
-                    tty: "/dev/ttys123",
+                    tty: "/dev/ttys001",
                     title: "Codex"
                 )
             }
@@ -68,8 +69,31 @@ final class TerminalJumpCaptureTests: XCTestCase {
         XCTAssertEqual(target?.workspaceName, "VibePet")
         XCTAssertEqual(target?.workingDirectory, "/Users/dev/Projects/VibePet")
         XCTAssertEqual(target?.terminalSessionID, "iterm-session")
-        XCTAssertEqual(target?.terminalTTY, "/dev/ttys123")
+        XCTAssertEqual(target?.terminalTTY, "/dev/ttys001", "process-derived TTY must not be replaced by a frontmost locator")
         XCTAssertEqual(target?.paneTitle, "Codex")
+    }
+
+    func testBuildJumpTargetRejectsLocatorMetadataFromDifferentTTY() {
+        let capture = TerminalJumpCapture(
+            currentTTYProvider: { "/dev/ttys001" },
+            terminalLocator: { _, _ in
+                TerminalJumpCapture.LocatorSnapshot(
+                    sessionID: "wrong-session",
+                    tty: "/dev/ttys999",
+                    title: "Wrong tab"
+                )
+            }
+        )
+
+        let target = capture.buildJumpTarget(
+            env: ["TERM_PROGRAM": "iTerm.app"],
+            cwd: "/tmp/project",
+            hookEventName: "PreToolUse"
+        )
+
+        XCTAssertEqual(target?.terminalTTY, "/dev/ttys001")
+        XCTAssertNil(target?.terminalSessionID)
+        XCTAssertNil(target?.paneTitle)
     }
 
     func testDefaultTerminalLocatorPreservesTerminalLeadingEmptySessionField() {
@@ -93,11 +117,11 @@ final class TerminalJumpCaptureTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 1)
     }
 
-    func testBuildJumpTargetGatesGhosttyLocatorToSafeEvents() {
+    func testBuildJumpTargetNeverCombinesGhosttyFrontmostIDWithProcessTTY() {
         var locateCount = 0
         let capture = TerminalJumpCapture(
             currentTTYProvider: { "/dev/ttys002" },
-            terminalLocator: { _ in
+            terminalLocator: { _, _ in
                 locateCount += 1
                 return TerminalJumpCapture.LocatorSnapshot(
                     sessionID: "ghostty-session",
@@ -118,8 +142,10 @@ final class TerminalJumpCaptureTests: XCTestCase {
             hookEventName: "PreToolUse"
         )
 
-        XCTAssertEqual(locateCount, 1)
-        XCTAssertEqual(safe?.terminalSessionID, "ghostty-session")
+        XCTAssertEqual(locateCount, 0)
+        XCTAssertEqual(safe?.terminalSessionID, nil)
+        XCTAssertEqual(safe?.paneTitle, nil)
+        XCTAssertEqual(safe?.terminalTTY, "/dev/ttys002")
         XCTAssertEqual(tool?.terminalSessionID, nil)
         XCTAssertEqual(tool?.paneTitle, nil)
         XCTAssertEqual(tool?.terminalTTY, "/dev/ttys002")
@@ -129,7 +155,7 @@ final class TerminalJumpCaptureTests: XCTestCase {
         var locateCount = 0
         let capture = TerminalJumpCapture(
             currentTTYProvider: { "/dev/ttys003" },
-            terminalLocator: { _ in
+            terminalLocator: { _, _ in
                 locateCount += 1
                 return nil
             }

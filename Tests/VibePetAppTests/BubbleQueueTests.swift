@@ -45,6 +45,30 @@ final class BubbleQueueTests: XCTestCase {
         XCTAssertEqual(queue.count, 2)
     }
 
+    func testRemoveByIDCanCancelNonFrontWithoutAdvancingFront() {
+        var queue = BubbleQueue<Item>()
+        let first = Item(id: UUID(), label: "A")
+        let middle = Item(id: UUID(), label: "B")
+        let last = Item(id: UUID(), label: "C")
+        queue.enqueue(first)
+        queue.enqueue(middle)
+        queue.enqueue(last)
+
+        XCTAssertEqual(queue.remove(id: middle.id)?.label, "B")
+        XCTAssertEqual(queue.front?.id, first.id)
+        XCTAssertEqual(queue.items.map(\.label), ["A", "C"])
+        XCTAssertEqual(queue.pendingCount, 1)
+    }
+
+    func testRemoveByUnknownIDIsNoOp() {
+        var queue = BubbleQueue<Item>()
+        let first = Item(id: UUID(), label: "A")
+        queue.enqueue(first)
+
+        XCTAssertNil(queue.remove(id: UUID()))
+        XCTAssertEqual(queue.items.map(\.label), ["A"])
+    }
+
     func testDrainEmptiesAndReturnsAll() {
         var queue = BubbleQueue<Item>()
         queue.enqueue(Item(id: UUID(), label: "A"))

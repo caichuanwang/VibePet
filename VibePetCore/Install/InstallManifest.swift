@@ -24,20 +24,56 @@ public struct ToolInstallRecord: Codable, Equatable, Sendable {
     /// Only the hook keys VibePet wrote (e.g. `["PreToolUse","Stop","Notification"]`).
     public var writtenHooks: [String]
     public var backupPath: String?
+    /// The Codex feature state observed before VibePet first installed hooks. Older
+    /// manifests decode as `.unknown`, so uninstall preserves shared feature flags.
+    public var codexFeatureStateBeforeInstall: CodexFeatureStateBeforeInstall
 
     public init(
         installed: Bool,
         activationState: ActivationState,
         settingsPath: String?,
         writtenHooks: [String],
-        backupPath: String?
+        backupPath: String?,
+        codexFeatureStateBeforeInstall: CodexFeatureStateBeforeInstall = .unknown
     ) {
         self.installed = installed
         self.activationState = activationState
         self.settingsPath = settingsPath
         self.writtenHooks = writtenHooks
         self.backupPath = backupPath
+        self.codexFeatureStateBeforeInstall = codexFeatureStateBeforeInstall
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case installed
+        case activationState
+        case settingsPath
+        case writtenHooks
+        case backupPath
+        case codexFeatureStateBeforeInstall
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        installed = try container.decode(Bool.self, forKey: .installed)
+        activationState = try container.decode(ActivationState.self, forKey: .activationState)
+        settingsPath = try container.decodeIfPresent(String.self, forKey: .settingsPath)
+        writtenHooks = try container.decodeIfPresent([String].self, forKey: .writtenHooks) ?? []
+        backupPath = try container.decodeIfPresent(String.self, forKey: .backupPath)
+        codexFeatureStateBeforeInstall = try container.decodeIfPresent(
+            CodexFeatureStateBeforeInstall.self,
+            forKey: .codexFeatureStateBeforeInstall
+        ) ?? .unknown
+    }
+}
+
+/// Receipt for the shared Codex hooks feature before VibePet's first install.
+/// Only `.disabled` authorizes VibePet to turn the feature back off on uninstall.
+public enum CodexFeatureStateBeforeInstall: String, Codable, Equatable, Sendable {
+    case unknown
+    case disabled
+    case enabledModern
+    case enabledLegacy
 }
 
 /// Whether a written tool hook is actually live. Codex command hooks may require the
@@ -62,13 +98,21 @@ public struct InstallManifestStore: Sendable {
     }
 
     public func read() -> InstallManifest {
-        guard
-            let data = try? Data(contentsOf: manifestURL),
-            let manifest = try? JSONDecoder().decode(InstallManifest.self, from: data)
-        else {
+        (try? readStrict()) ?? InstallManifest()
+    }
+
+    /// Strict read used by diagnostics so a corrupted manifest is not silently
+    /// indistinguishable from a genuinely absent one.
+    public func readStrict() throws -> InstallManifest {
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
             return InstallManifest()
         }
-        return manifest
+        let data = try Data(contentsOf: manifestURL)
+        do {
+            return try JSONDecoder().decode(InstallManifest.self, from: data)
+        } catch {
+            throw InstallManifestReadError.malformed(path: manifestURL.path)
+        }
     }
 
     public func write(_ manifest: InstallManifest) throws {
@@ -97,4 +141,8 @@ public struct InstallManifestStore: Sendable {
         try? write(manifest)
         return true
     }
+}
+
+public enum InstallManifestReadError: Error, Equatable, Sendable {
+    case malformed(path: String)
 }

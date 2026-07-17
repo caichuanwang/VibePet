@@ -2,16 +2,20 @@ import Foundation
 
 public final class BridgeServer: Sendable {
     public typealias Handler = @Sendable (BridgeEnvelope) async throws -> BridgeResponseEnvelope
+    public typealias CancellationHandler = @Sendable (UUID) -> Void
 
     private let socketPath: SocketPath
     private let handler: Handler
+    private let cancellationHandler: CancellationHandler
     private let state = BridgeServerState()
 
     public init(
         socketPath: SocketPath = SocketPath(),
+        cancellationHandler: @escaping CancellationHandler = { _ in },
         handler: @escaping Handler
     ) {
         self.socketPath = socketPath
+        self.cancellationHandler = cancellationHandler
         self.handler = handler
     }
 
@@ -24,6 +28,7 @@ public final class BridgeServer: Sendable {
             throw BridgeServerError.bindFailed(path: socketPath.socketURL.path)
         }
 
+        var boundIdentity: BridgeSocketIO.SocketFileIdentity?
         do {
             var address = try BridgeSocketIO.socketAddress(for: socketPath.socketURL.path)
             let length = BridgeSocketIO.addressLength(for: socketPath.socketURL.path)
@@ -37,64 +42,84 @@ public final class BridgeServer: Sendable {
                 throw BridgeServerError.bindFailed(path: socketPath.socketURL.path)
             }
 
+            let identity = try BridgeSocketIO.verifiedSocketIdentity(at: socketPath.socketURL)
+            guard let identity else {
+                throw BridgeServerError.unsafeSocketPath(path: socketPath.socketURL.path)
+            }
+            boundIdentity = identity
             try socketPath.setSocketPermissions()
 
             guard Darwin.listen(fileDescriptor, SOMAXCONN) == 0 else {
                 throw BridgeServerError.listenFailed(path: socketPath.socketURL.path)
             }
 
-            // Register the listen fd and spawn the dedicated accept thread. Both
-            // happen here (synchronously, before start() returns) so there is no
-            // window where the fd is live but unregistered (TD-2).
             let handler = self.handler
-            try state.startAccepting(listenFileDescriptor: fileDescriptor) { clientFileDescriptor in
-                BridgeServer.handleConnection(clientFileDescriptor, handler: handler)
+            let cancellationHandler = self.cancellationHandler
+            try state.startAccepting(
+                listenFileDescriptor: fileDescriptor,
+                socketURL: socketPath.socketURL,
+                socketIdentity: identity
+            ) { clientFileDescriptor in
+                BridgeServer.handleConnection(
+                    clientFileDescriptor,
+                    handler: handler,
+                    cancellationHandler: cancellationHandler
+                )
             }
         } catch {
             BridgeSocketIO.close(fileDescriptor)
+            if let boundIdentity {
+                try? BridgeSocketIO.removeSocket(at: socketPath.socketURL, matching: boundIdentity)
+            }
             throw error
         }
     }
 
     public func stop() {
-        state.stop(socketURL: socketPath.socketURL)
+        state.stop()
     }
 
     deinit {
         stop()
     }
 
-    /// Runs on a dedicated handling queue (off the cooperative pool). Blocking
-    /// reads/writes happen here; the async handler is bridged synchronously so it
-    /// can hop to its own actor without occupying a cooperative thread for I/O.
-    private static func handleConnection(_ clientFileDescriptor: Int32, handler: @escaping Handler) {
-        // `defer` is the single owner of the client fd close on every path.
-        defer {
-            BridgeSocketIO.close(clientFileDescriptor)
-        }
-
+    private static func handleConnection(
+        _ clientFileDescriptor: Int32,
+        handler: @escaping Handler,
+        cancellationHandler: @escaping CancellationHandler
+    ) {
+        // BridgeServerState owns the accepted fd and closes it after this handler
+        // returns, so stop() can safely snapshot and shutdown live connections.
         do {
-            let requestData = try BridgeSocketIO.readLine(from: clientFileDescriptor)
+            let requestData = try BridgeSocketIO.readLine(
+                from: clientFileDescriptor,
+                absoluteTimeout: 2
+            )
             let envelope = try JSONDecoder().decode(BridgeEnvelope.self, from: requestData)
-            let response = try runHandlerSynchronously { try await handler(envelope) }
+            let response = try runHandlerSynchronously(
+                requestID: envelope.requestId,
+                clientFileDescriptor: clientFileDescriptor,
+                cancellationHandler: envelope.content.needsResponse ? cancellationHandler : nil
+            ) {
+                try await handler(envelope)
+            }
             let responseData = try JSONEncoder().encode(response)
             try BridgeSocketIO.writeLine(responseData, to: clientFileDescriptor)
         } catch {
-            // Connection failed mid-exchange (including a notification client that
-            // closed without reading the reply); the client treats a dropped
-            // connection as fail-open. The fd is released by `defer`.
+            // Every transport failure is fail-open. The accepted fd is closed by defer.
         }
     }
 }
 
-/// Bridges the async handler to the synchronous handling thread. The semaphore
-/// establishes a happens-before edge, so the result box needs no extra locking.
 private func runHandlerSynchronously(
+    requestID: UUID,
+    clientFileDescriptor: Int32,
+    cancellationHandler: BridgeServer.CancellationHandler?,
     _ operation: @escaping @Sendable () async throws -> BridgeResponseEnvelope
 ) throws -> BridgeResponseEnvelope {
     let semaphore = DispatchSemaphore(value: 0)
     let box = HandlerResultBox()
-    Task {
+    let task = Task {
         do {
             box.store(.success(try await operation()))
         } catch {
@@ -102,18 +127,36 @@ private func runHandlerSynchronously(
         }
         semaphore.signal()
     }
-    semaphore.wait()
+
+    while semaphore.wait(timeout: .now() + 0.05) == .timedOut {
+        guard let cancellationHandler else {
+            continue
+        }
+        switch BridgeSocketIO.pendingPeerEvent(clientFileDescriptor) {
+        case .none:
+            continue
+        case .disconnected, .unexpectedInput:
+            cancellationHandler(requestID)
+            task.cancel()
+            throw BridgeSocketError.connectionClosed
+        }
+    }
     return try box.take()
 }
 
 private final class HandlerResultBox: @unchecked Sendable {
+    private let lock = NSLock()
     private var result: Result<BridgeResponseEnvelope, Error>?
 
     func store(_ value: Result<BridgeResponseEnvelope, Error>) {
+        lock.lock()
         result = value
+        lock.unlock()
     }
 
     func take() throws -> BridgeResponseEnvelope {
+        lock.lock()
+        defer { lock.unlock() }
         guard let result else {
             throw BridgeSocketError.connectionClosed
         }
@@ -123,6 +166,8 @@ private final class HandlerResultBox: @unchecked Sendable {
 
 public enum BridgeServerError: Error, Equatable {
     case socketInUse(path: String)
+    case unsafeSocketPath(path: String)
     case bindFailed(path: String)
     case listenFailed(path: String)
+    case serverStopped
 }

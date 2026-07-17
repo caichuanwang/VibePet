@@ -96,6 +96,32 @@ final class HookInstallCoordinatorTests: XCTestCase {
         XCTAssertFalse(coordinator.hasRepairableDriftAmongDetected(), "hint clears after repair")
     }
 
+    func testInvalidExplicitBinaryOverrideDoesNotInstallFallback() throws {
+        let root = try tempDir()
+        let claudeConfig = root.appendingPathComponent("claude/settings.json")
+        try FileManager.default.createDirectory(
+            at: claudeConfig.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("{}".utf8).write(to: claudeConfig)
+        let stableBinary = InstallPaths.hookBinaryURL(applicationSupportRoot: root)
+        let installer = HookInstaller(applicationSupportRoot: root, writers: [
+            ClaudeCodeConfigWriter(configURL: claudeConfig, hookBinaryPath: stableBinary.path),
+        ])
+        let invalidOverride = root.appendingPathComponent("invalid-override")
+        try Data("not executable".utf8).write(to: invalidOverride)
+        let coordinator = HookInstallCoordinator(
+            installer: installer,
+            hookBinaryLocation: .invalidExplicitOverride(invalidOverride)
+        )
+
+        coordinator.install(.claudeCode)
+
+        XCTAssertNotNil(coordinator.lastError)
+        XCTAssertTrue(coordinator.lastError?.message.contains(HooksBinaryLocator.environmentKey) == true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stableBinary.path))
+    }
+
     // MARK: - Helpers
 
     private func tempDir() throws -> URL {

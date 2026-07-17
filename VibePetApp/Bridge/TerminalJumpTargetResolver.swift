@@ -63,24 +63,45 @@ struct TerminalJumpTargetResolver: Sendable {
         var usedSessionIDs: Set<String> = []
         var usedSnapshotIDs: Set<String> = []
 
-        func assign(where predicate: (AgentSession, GhosttySnapshot) -> Bool) {
+        func assignExactIDs() {
             for snapshot in snapshots where !usedSnapshotIDs.contains(snapshot.sessionID) {
-                guard let session = sessions.first(where: {
-                    !usedSessionIDs.contains($0.id) && predicate($0, snapshot)
-                }) else {
-                    continue
+                let matches = sessions.filter {
+                    !usedSessionIDs.contains($0.id)
+                        && nonEmpty($0.jumpTarget?.terminalSessionID) == snapshot.sessionID
                 }
+                guard matches.count == 1, let session = matches.first else { continue }
                 result.append((session, snapshot))
                 usedSessionIDs.insert(session.id)
                 usedSnapshotIDs.insert(snapshot.sessionID)
             }
         }
 
-        assign { nonEmpty($0.jumpTarget?.terminalSessionID) == $1.sessionID }
-        assign { normalizedPath($0.jumpTarget?.workingDirectory) == normalizedPath($1.workingDirectory) }
-        assign {
-            guard let title = nonEmpty($0.jumpTarget?.paneTitle) else { return false }
-            return $1.title.contains(title)
+        func assignUniqueWeakMatches(where predicate: (AgentSession, GhosttySnapshot) -> Bool) {
+            for snapshot in snapshots where !usedSnapshotIDs.contains(snapshot.sessionID) {
+                let candidates = sessions.filter {
+                    !usedSessionIDs.contains($0.id) && predicate($0, snapshot)
+                }
+                guard candidates.count == 1, let session = candidates.first else { continue }
+                let competingSnapshots = snapshots.filter {
+                    !usedSnapshotIDs.contains($0.sessionID) && predicate(session, $0)
+                }
+                guard competingSnapshots.count == 1 else { continue }
+                result.append((session, snapshot))
+                usedSessionIDs.insert(session.id)
+                usedSnapshotIDs.insert(snapshot.sessionID)
+            }
+        }
+
+        assignExactIDs()
+        assignUniqueWeakMatches {
+            guard let sessionPath = normalizedPath($0.jumpTarget?.workingDirectory),
+                  let snapshotPath = normalizedPath($1.workingDirectory) else { return false }
+            return sessionPath == snapshotPath
+        }
+        assignUniqueWeakMatches {
+            guard let title = nonEmpty($0.jumpTarget?.paneTitle),
+                  let snapshotTitle = nonEmpty($1.title) else { return false }
+            return snapshotTitle.localizedCaseInsensitiveContains(title)
         }
 
         return result
@@ -92,9 +113,16 @@ struct TerminalJumpTargetResolver: Sendable {
 
         changed = set(&target.terminalApp, "Ghostty") || changed
         changed = set(&target.terminalSessionID, snapshot.sessionID) || changed
-        changed = set(&target.workingDirectory, snapshot.workingDirectory) || changed
-        changed = set(&target.paneTitle, snapshot.title) || changed
-        changed = set(&target.workspaceName, URL(fileURLWithPath: snapshot.workingDirectory).lastPathComponent) || changed
+        if let workingDirectory = nonEmpty(snapshot.workingDirectory) {
+            changed = set(&target.workingDirectory, workingDirectory) || changed
+            changed = set(
+                &target.workspaceName,
+                URL(fileURLWithPath: workingDirectory).standardizedFileURL.lastPathComponent
+            ) || changed
+        }
+        if let title = nonEmpty(snapshot.title) {
+            changed = set(&target.paneTitle, title) || changed
+        }
 
         return changed ? target : nil
     }
@@ -107,23 +135,26 @@ struct TerminalJumpTargetResolver: Sendable {
         var usedSessionIDs: Set<String> = []
         var usedTTYs: Set<String> = []
 
-        func assign(where predicate: (AgentSession, TerminalSnapshot) -> Bool) {
+        func assignUnique(where predicate: (AgentSession, TerminalSnapshot) -> Bool) {
             for snapshot in snapshots where !usedTTYs.contains(snapshot.tty) {
-                guard let session = sessions.first(where: {
+                let candidates = sessions.filter {
                     !usedSessionIDs.contains($0.id) && predicate($0, snapshot)
-                }) else {
-                    continue
                 }
+                guard candidates.count == 1, let session = candidates.first else { continue }
+                let competingSnapshots = snapshots.filter {
+                    !usedTTYs.contains($0.tty) && predicate(session, $0)
+                }
+                guard competingSnapshots.count == 1 else { continue }
                 result.append((session, snapshot))
                 usedSessionIDs.insert(session.id)
                 usedTTYs.insert(snapshot.tty)
             }
         }
 
-        assign { nonEmpty($0.jumpTarget?.terminalTTY) == $1.tty }
-        assign {
+        assignUnique { normalizedTTY($0.jumpTarget?.terminalTTY) == normalizedTTY($1.tty) }
+        assignUnique {
             guard let title = nonEmpty($0.jumpTarget?.paneTitle) else { return false }
-            return $1.title.contains(title)
+            return $1.title.localizedCaseInsensitiveContains(title)
         }
 
         return result
@@ -158,7 +189,13 @@ struct TerminalJumpTargetResolver: Sendable {
     }
 
     private func normalizedPath(_ value: String?) -> String? {
-        nonEmpty(value).map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        nonEmpty(value).map {
+            URL(fileURLWithPath: $0).standardizedFileURL.path.lowercased()
+        }
+    }
+
+    private func normalizedTTY(_ value: String?) -> String? {
+        nonEmpty(value)?.replacingOccurrences(of: "/dev/", with: "")
     }
 
     private func nonEmpty(_ value: String?) -> String? {
@@ -190,7 +227,7 @@ struct TerminalJumpTargetResolver: Sendable {
             .components(separatedBy: "\u{1E}")
             .compactMap { row in
                 let fields = row.components(separatedBy: "\u{1F}")
-                guard fields.count == 3, !fields[0].isEmpty, !fields[1].isEmpty else {
+                guard fields.count == 3, !fields[0].isEmpty else {
                     return nil
                 }
                 return GhosttySnapshot(sessionID: fields[0], workingDirectory: fields[1], title: fields[2])

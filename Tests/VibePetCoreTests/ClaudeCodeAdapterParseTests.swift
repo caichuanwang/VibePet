@@ -115,11 +115,12 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
             transcriptSummaryReader: { _ in nil },
             terminalJumpCapture: TerminalJumpCapture(
                 currentTTYProvider: { "/dev/ttys001" },
-                terminalLocator: { app in
+                terminalLocator: { app, tty in
                     XCTAssertEqual(app, "Terminal")
+                    XCTAssertEqual(tty, "/dev/ttys001")
                     return TerminalJumpCapture.LocatorSnapshot(
                         sessionID: nil,
-                        tty: "/dev/ttys111",
+                        tty: "/dev/ttys001",
                         title: "Claude"
                     )
                 }
@@ -134,7 +135,7 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
         XCTAssertEqual(envelope.source.jumpTarget?.terminalApp, "Terminal")
         XCTAssertEqual(envelope.source.jumpTarget?.workspaceName, "VibePet")
         XCTAssertEqual(envelope.source.jumpTarget?.workingDirectory, "/Users/dev/Projects/VibePet")
-        XCTAssertEqual(envelope.source.jumpTarget?.terminalTTY, "/dev/ttys111")
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalTTY, "/dev/ttys001")
         XCTAssertEqual(envelope.source.jumpTarget?.paneTitle, "Claude")
     }
 
@@ -143,7 +144,7 @@ final class ClaudeCodeAdapterParseTests: XCTestCase {
             transcriptSummaryReader: { _ in nil },
             terminalJumpCapture: TerminalJumpCapture(
                 currentTTYProvider: { nil },
-                terminalLocator: { _ in nil }
+                terminalLocator: { _, _ in nil }
             )
         )
 

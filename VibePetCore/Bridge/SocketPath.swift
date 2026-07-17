@@ -26,7 +26,7 @@ public struct SocketPath: Equatable, Sendable {
     }
 
     public func removeStaleSocket() throws {
-        guard FileManager.default.fileExists(atPath: socketURL.path) else {
+        guard let identity = try BridgeSocketIO.verifiedSocketIdentity(at: socketURL) else {
             return
         }
 
@@ -34,7 +34,7 @@ public struct SocketPath: Equatable, Sendable {
             throw BridgeServerError.socketInUse(path: socketURL.path)
         }
 
-        try FileManager.default.removeItem(at: socketURL)
+        try BridgeSocketIO.removeSocket(at: socketURL, matching: identity)
     }
 
     public func setSocketPermissions() throws {

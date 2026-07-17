@@ -22,6 +22,35 @@ public protocol ToolConfigWriter: Sendable {
 
     /// Removes only VibePet's entries, preserving user entries.
     func uninstall() throws
+
+    /// Installs while returning tool-specific state that uninstall needs to avoid
+    /// reverting settings VibePet did not own.
+    func installWithReceipt(arguments: [String]) throws -> ToolConfigInstallReceipt
+
+    /// Removes managed entries using the first-install receipt from the manifest.
+    func uninstall(receipt: ToolConfigInstallReceipt) throws
+}
+
+public enum ToolConfigInstallReceipt: Equatable, Sendable {
+    case none
+    case codexFeature(CodexFeatureStateBeforeInstall)
+}
+
+public enum ToolConfigMutationError: Error, Equatable, Sendable {
+    case malformedJSON(path: String)
+    case malformedTOML(path: String)
+    case unreadable(path: String)
+}
+
+public enum SetupToolSelector {
+    public static func tools(for argument: String?) -> [ToolKind]? {
+        switch argument {
+        case nil, "all": [.claudeCode, .codex]
+        case "claude", "claudeCode": [.claudeCode]
+        case "codex": [.codex]
+        default: nil
+        }
+    }
 }
 
 public extension ToolConfigWriter {
@@ -39,5 +68,14 @@ public extension ToolConfigWriter {
         var isDirectory: ObjCBool = false
         let parent = configURL.deletingLastPathComponent().path
         return FileManager.default.fileExists(atPath: parent, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    func installWithReceipt(arguments: [String]) throws -> ToolConfigInstallReceipt {
+        try install(arguments: arguments)
+        return .none
+    }
+
+    func uninstall(receipt: ToolConfigInstallReceipt) throws {
+        try uninstall()
     }
 }

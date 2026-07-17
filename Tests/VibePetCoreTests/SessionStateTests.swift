@@ -160,7 +160,7 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state(applying: events), state(applying: events))
     }
 
-    func testSessionStartedPreservesExistingFirstSeenAt() {
+    func testDuplicateSessionStartedPreservesExistingLifecycle() {
         var state = SessionState()
         state.apply(started("s1", at: base))
         state.apply(.sessionStarted(
@@ -174,9 +174,11 @@ final class SessionStateTests: XCTestCase {
 
         let session = state.sessionsByID["s1"]
         XCTAssertEqual(session?.firstSeenAt, base)
-        XCTAssertEqual(session?.updatedAt, base.addingTimeInterval(20))
+        XCTAssertEqual(session?.updatedAt, base)
         XCTAssertEqual(session?.phase, .running)
-        XCTAssertEqual(session?.title, "Renamed")
+        XCTAssertEqual(session?.title, "Session s1")
+        XCTAssertEqual(session?.tool, .claudeCode)
+        XCTAssertEqual(session?.summary, "Started")
     }
 
     func testActivityUpdatedDoesNotClearPendingDecision() {
@@ -225,12 +227,13 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.sessionsByID["s1"]?.summary, "Done")
     }
 
-    func testJumpTargetUpdatedChangesOnlyJumpTargetAndTimestamp() {
+    func testJumpTargetUpdatedMergesMetadataWithoutChangingLifecycleTimestamp() {
         var state = state(applying: [
             started("s1", at: base),
             .permissionRequested(sessionID: "s1", timestamp: base.addingTimeInterval(1), summary: "Approve"),
         ])
-        state.apply(.jumpTargetUpdated(
+        let lifecycleTimestamp = state.sessionsByID["s1"]?.updatedAt
+        XCTAssertTrue(state.apply(.jumpTargetUpdated(
             sessionID: "s1",
             timestamp: base.addingTimeInterval(2),
             jumpTarget: JumpTarget(
@@ -238,7 +241,7 @@ final class SessionStateTests: XCTestCase {
                 terminalSessionID: "session-1",
                 terminalTTY: "/dev/ttys001"
             )
-        ))
+        )))
 
         let session = state.sessionsByID["s1"]
         XCTAssertEqual(session?.jumpTarget?.terminalSessionID, "session-1")
@@ -247,7 +250,7 @@ final class SessionStateTests: XCTestCase {
         XCTAssertTrue(session?.isProcessAlive == true)
         XCTAssertFalse(session?.isSessionEnded == true)
         XCTAssertEqual(session?.processNotSeenCount, 0)
-        XCTAssertEqual(session?.updatedAt, base.addingTimeInterval(2))
+        XCTAssertEqual(session?.updatedAt, lifecycleTimestamp)
     }
 
     func testUnknownSessionNonStartEventsAreIgnored() {

@@ -1,35 +1,26 @@
 import Foundation
 
-/// A structured diagnosis of one tool's hook integration, beyond the manifest's
-/// "installed?" bit. It catches config drift the simple status check misses: a moved
-/// binary, hand-edited JSON, a removed hook, or (Codex) a disabled feature flag —
-/// each classified so the UI/CLI can offer a one-click repair (re-run install).
 public struct HookHealthReport: Equatable, Sendable {
     public enum Severity: Equatable, Sendable {
-        /// A real problem that likely prevents VibePet hooks from working.
         case error
-        /// Informational — hooks still work (e.g. other tools' hooks coexist).
         case info
     }
 
     public enum Issue: Equatable, Sendable, CustomStringConvertible {
-        /// The managed `bin/VibePetHooks` is absent.
         case binaryNotFound(path: String)
-        /// The managed binary exists but is not executable.
         case binaryNotExecutable(path: String)
-        /// A managed JSON config file is not valid JSON (VibePet can't safely merge).
+        case binaryVersionMismatch(recorded: String?, expected: String)
         case configMalformedJSON(path: String)
-        /// A config command references a `VibePetHooks` path that no longer exists.
+        case configMalformedTOML(path: String)
+        case manifestMalformed(path: String)
+        case manifestSettingsPathMismatch(recorded: String?, expected: String)
+        case manifestHookSetMismatch(recorded: [String], expected: [String])
         case staleCommandPath(recorded: String, configPath: String)
-        /// The tool is marked installed, but no VibePet hook command is in its config.
         case managedHooksMissing(configPath: String)
-        /// The config still references VibePet hooks but no install is recorded — the
-        /// manifest was lost or the binary was removed out from under us. Reinstall
-        /// (to re-establish the manifest) or uninstall (to clean the config) repairs it.
+        case managedHookKeyMissing(key: String, configPath: String)
+        case codexToolArgumentMissing(configPath: String)
         case orphanedInstall(configPath: String)
-        /// Codex is installed but its `[features]` hooks flag is off, so hooks won't run.
         case codexFeatureDisabled(configPath: String)
-        /// Other (non-VibePet) hooks coexist in the config — informational only.
         case otherHooksDetected(names: [String])
 
         public var severity: Severity {
@@ -39,14 +30,15 @@ public struct HookHealthReport: Equatable, Sendable {
             }
         }
 
-        /// Whether re-running install fixes it. Malformed user JSON and foreign hooks
-        /// are not VibePet's to rewrite.
         public var isAutoRepairable: Bool {
             switch self {
-            case .binaryNotFound, .binaryNotExecutable, .staleCommandPath,
-                 .managedHooksMissing, .orphanedInstall, .codexFeatureDisabled:
+            case .binaryNotFound, .binaryNotExecutable, .binaryVersionMismatch,
+                 .manifestSettingsPathMismatch, .manifestHookSetMismatch,
+                 .staleCommandPath, .managedHooksMissing, .managedHookKeyMissing,
+                 .codexToolArgumentMissing, .orphanedInstall, .codexFeatureDisabled:
                 true
-            case .configMalformedJSON, .otherHooksDetected:
+            case .configMalformedJSON, .configMalformedTOML, .manifestMalformed,
+                 .otherHooksDetected:
                 false
             }
         }
@@ -57,12 +49,26 @@ public struct HookHealthReport: Equatable, Sendable {
                 "Hook binary not found: \(path)"
             case .binaryNotExecutable(let path):
                 "Hook binary is not executable: \(path)"
+            case .binaryVersionMismatch(let recorded, let expected):
+                "Hook binary version mismatch: recorded \(recorded ?? "missing"), expected \(expected)"
             case .configMalformedJSON(let path):
                 "Config file is not valid JSON: \(path)"
+            case .configMalformedTOML(let path):
+                "Config file has unsafe TOML syntax: \(path)"
+            case .manifestMalformed(let path):
+                "Install manifest is not valid JSON: \(path)"
+            case .manifestSettingsPathMismatch(let recorded, let expected):
+                "Manifest settings path mismatch: recorded \(recorded ?? "missing"), expected \(expected)"
+            case .manifestHookSetMismatch(let recorded, let expected):
+                "Manifest hook set mismatch: recorded \(recorded.sorted()), expected \(expected.sorted())"
             case .staleCommandPath(let recorded, let configPath):
-                "Command in \(configPath) points to a missing binary: \(recorded)"
+                "Command in \(configPath) points to \(recorded), not the managed binary"
             case .managedHooksMissing(let configPath):
                 "VibePet hook entry is missing from \(configPath)"
+            case .managedHookKeyMissing(let key, let configPath):
+                "VibePet hook entry \(key) is missing from \(configPath)"
+            case .codexToolArgumentMissing(let configPath):
+                "Codex hook command in \(configPath) is missing --tool codex"
             case .orphanedInstall(let configPath):
                 "Config references VibePet hooks but no install is recorded (orphaned): \(configPath)"
             case .codexFeatureDisabled(let configPath):
@@ -81,128 +87,242 @@ public struct HookHealthReport: Equatable, Sendable {
         self.issues = issues
     }
 
-    /// No error-severity issues (info notices are fine).
     public var isHealthy: Bool { errors.isEmpty }
     public var errors: [Issue] { issues.filter { $0.severity == .error } }
     public var notices: [Issue] { issues.filter { $0.severity == .info } }
     public var repairableIssues: [Issue] { issues.filter(\.isAutoRepairable) }
 }
 
-/// Read-only deep health check over a tool's managed binary + config files. It never
-/// writes; repair is left to the caller (re-running `HookInstaller.install`).
+/// Read-only diagnosis. It never creates, repairs, or rewrites configuration files.
 public enum HookHealthCheck {
-    /// Diagnoses one tool. `recordedInstalled` (from the manifest/status) distinguishes
-    /// "should be there but isn't" drift from "shouldn't be there but is" (orphaned)
-    /// drift. The config is always scanned so a lost manifest with leftover hooks is
-    /// still caught, rather than silently reported clean.
     public static func check(
         tool: ToolKind,
         writer: any ToolConfigWriter,
         managedBinaryURL: URL,
         recordedInstalled: Bool,
+        recordedRecord: ToolInstallRecord? = nil,
+        recordedBinaryVersion: String? = nil,
+        expectedBinaryVersion: String? = nil,
+        manifestMalformedPath: String? = nil,
         fileManager: FileManager = .default
     ) -> HookHealthReport {
-        var issues: [HookHealthReport.Issue] = []
-
-        // 1. Scan JSON config files (Claude settings.json / Codex hooks.json). config.toml
-        //    is not JSON and is handled separately below.
-        let jsonFiles = writer.managedFiles.filter { $0.pathExtension == "json" }
-        var foundManagedCommand = false
-        var otherNames: Set<String> = []
-
-        for file in jsonFiles where fileManager.fileExists(atPath: file.path) {
-            guard let data = try? Data(contentsOf: file) else { continue }
-            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                issues.append(.configMalformedJSON(path: file.path))
-                continue
-            }
-            for command in hookCommands(in: root) {
-                if isVibePetCommand(command) {
-                    foundManagedCommand = true
-                    let recorded = recordedBinaryPath(from: command)
-                    if !fileManager.fileExists(atPath: recorded) {
-                        issues.append(.staleCommandPath(recorded: recorded, configPath: file.path))
-                    }
-                } else {
-                    otherNames.insert(commandName(from: command))
-                }
-            }
+        var issues = manifestIssues(
+            writer: writer,
+            recordedInstalled: recordedInstalled,
+            record: recordedRecord,
+            recordedBinaryVersion: recordedBinaryVersion,
+            expectedBinaryVersion: expectedBinaryVersion,
+            manifestMalformedPath: manifestMalformedPath
+        )
+        let scan = scanJSONConfigs(
+            tool: tool,
+            writer: writer,
+            expectedBinaryPath: managedBinaryURL.standardizedFileURL.path,
+            fileManager: fileManager
+        )
+        issues.append(contentsOf: scan.issues)
+        issues.append(contentsOf: recordedInstalled
+            ? installedIssues(
+                tool: tool,
+                writer: writer,
+                managedBinaryURL: managedBinaryURL,
+                scan: scan,
+                fileManager: fileManager
+            )
+            : orphanedIssues(writer: writer, scan: scan))
+        if !scan.otherNames.isEmpty {
+            issues.append(.otherHooksDetected(names: scan.otherNames.sorted()))
         }
-
-        // 2. Drift: manifest vs config.
-        if recordedInstalled {
-            // Managed binary should be present and runnable.
-            let binaryPath = managedBinaryURL.path
-            if !fileManager.fileExists(atPath: binaryPath) {
-                issues.append(.binaryNotFound(path: binaryPath))
-            } else if !fileManager.isExecutableFile(atPath: binaryPath) {
-                issues.append(.binaryNotExecutable(path: binaryPath))
-            }
-
-            if !foundManagedCommand, let hooksFile = jsonFiles.first {
-                issues.append(.managedHooksMissing(configPath: hooksFile.path))
-            }
-
-            // Codex feature flag (config.toml) must be on for hooks to run.
-            if tool == .codex {
-                let toml = (try? String(contentsOf: writer.configURL, encoding: .utf8)) ?? ""
-                if !CodexConfigWriter.featureEnabled(in: toml) {
-                    issues.append(.codexFeatureDisabled(configPath: writer.configURL.path))
-                }
-            }
-        } else if foundManagedCommand, let hooksFile = jsonFiles.first {
-            // Not recorded as installed, yet the config still references VibePet.
-            issues.append(.orphanedInstall(configPath: hooksFile.path))
-        }
-
-        if !otherNames.isEmpty {
-            issues.append(.otherHooksDetected(names: otherNames.sorted()))
-        }
-
-        return HookHealthReport(tool: tool, issues: issues)
+        return HookHealthReport(tool: tool, issues: deduplicated(issues))
     }
 
-    // MARK: - JSON scanning (shared shape: root.hooks.<event>[].hooks[].command)
+    private struct ConfigScan {
+        var validManagedKeys: Set<String> = []
+        var foundAnyVibePetCommand = false
+        var otherNames: Set<String> = []
+        var isConclusive = true
+        var issues: [HookHealthReport.Issue] = []
+    }
 
-    private static func hookCommands(in root: [String: Any]) -> [String] {
+    private static func manifestIssues(
+        writer: any ToolConfigWriter,
+        recordedInstalled: Bool,
+        record: ToolInstallRecord?,
+        recordedBinaryVersion: String?,
+        expectedBinaryVersion: String?,
+        manifestMalformedPath: String?
+    ) -> [HookHealthReport.Issue] {
+        var issues: [HookHealthReport.Issue] = []
+        if let manifestMalformedPath { issues.append(.manifestMalformed(path: manifestMalformedPath)) }
+        guard recordedInstalled else { return issues }
+        if let record {
+            if standardizedPath(record.settingsPath) != managedSettingsPath(writer.configURL) {
+                issues.append(.manifestSettingsPathMismatch(
+                    recorded: record.settingsPath,
+                    expected: writer.configURL.standardizedFileURL.path
+                ))
+            }
+            if Set(record.writtenHooks) != Set(writer.managedHookKeys) {
+                issues.append(.manifestHookSetMismatch(recorded: record.writtenHooks, expected: writer.managedHookKeys))
+            }
+        }
+        if let expectedBinaryVersion, recordedBinaryVersion != expectedBinaryVersion {
+            issues.append(.binaryVersionMismatch(recorded: recordedBinaryVersion, expected: expectedBinaryVersion))
+        }
+        return issues
+    }
+
+    private static func scanJSONConfigs(
+        tool: ToolKind,
+        writer: any ToolConfigWriter,
+        expectedBinaryPath: String,
+        fileManager: FileManager
+    ) -> ConfigScan {
+        var scan = ConfigScan()
+        for file in writer.managedFiles where file.pathExtension == "json" && fileManager.fileExists(atPath: file.path) {
+            guard let data = try? Data(contentsOf: file),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                scan.issues.append(.configMalformedJSON(path: file.path))
+                scan.isConclusive = false
+                continue
+            }
+            guard (try? HookConfigurationJSON.validatedHooks(in: root, path: file.path)) != nil else {
+                scan.issues.append(.configMalformedJSON(path: file.path))
+                scan.isConclusive = false
+                continue
+            }
+            for entry in hookCommandsByKey(in: root) {
+                consume(entry, tool: tool, file: file, expectedBinaryPath: expectedBinaryPath, scan: &scan)
+            }
+        }
+        return scan
+    }
+
+    private static func consume(
+        _ entry: HookCommand,
+        tool: ToolKind,
+        file: URL,
+        expectedBinaryPath: String,
+        scan: inout ConfigScan
+    ) {
+        guard isVibePetCommand(entry.command),
+              let recordedPath = HookCommandShell.firstArgument(in: entry.command) else {
+            scan.otherNames.insert(commandName(from: entry.command))
+            return
+        }
+        scan.foundAnyVibePetCommand = true
+        guard URL(fileURLWithPath: recordedPath).standardizedFileURL.path == expectedBinaryPath else {
+            scan.issues.append(.staleCommandPath(recorded: recordedPath, configPath: file.path))
+            return
+        }
+        guard tool != .codex || hasCodexToolArgument(entry.command) else {
+            scan.issues.append(.codexToolArgumentMissing(configPath: file.path))
+            return
+        }
+        scan.validManagedKeys.insert(entry.key)
+    }
+
+    private static func installedIssues(
+        tool: ToolKind,
+        writer: any ToolConfigWriter,
+        managedBinaryURL: URL,
+        scan: ConfigScan,
+        fileManager: FileManager
+    ) -> [HookHealthReport.Issue] {
+        var issues = binaryIssues(at: managedBinaryURL, fileManager: fileManager)
+        let jsonFiles = writer.managedFiles.filter { $0.pathExtension == "json" }
+        if scan.isConclusive {
+            if scan.validManagedKeys.isEmpty, let hooksFile = jsonFiles.first {
+                issues.append(.managedHooksMissing(configPath: hooksFile.path))
+            }
+            let configPath = jsonFiles.first?.path ?? writer.configURL.path
+            issues += writer.managedHookKeys.compactMap { key in
+                scan.validManagedKeys.contains(key) ? nil : .managedHookKeyMissing(key: key, configPath: configPath)
+            }
+        }
+        if tool == .codex {
+            issues += codexFeatureIssues(configURL: writer.configURL, fileManager: fileManager)
+        }
+        return issues
+    }
+
+    private static func binaryIssues(at url: URL, fileManager: FileManager) -> [HookHealthReport.Issue] {
+        if !fileManager.fileExists(atPath: url.path) { return [.binaryNotFound(path: url.path)] }
+        if !fileManager.isExecutableFile(atPath: url.path) { return [.binaryNotExecutable(path: url.path)] }
+        return []
+    }
+
+    private static func codexFeatureIssues(configURL: URL, fileManager: FileManager) -> [HookHealthReport.Issue] {
+        guard fileManager.fileExists(atPath: configURL.path) else {
+            return [.codexFeatureDisabled(configPath: configURL.path)]
+        }
+        guard let toml = try? String(contentsOf: configURL, encoding: .utf8),
+              CodexConfigWriter.featureSyntaxIsSafe(in: toml) else {
+            return [.configMalformedTOML(path: configURL.path)]
+        }
+        return CodexConfigWriter.featureEnabled(in: toml) ? [] : [.codexFeatureDisabled(configPath: configURL.path)]
+    }
+
+    private static func orphanedIssues(writer: any ToolConfigWriter, scan: ConfigScan) -> [HookHealthReport.Issue] {
+        guard scan.isConclusive, scan.foundAnyVibePetCommand,
+              let hooksFile = writer.managedFiles.first(where: { $0.pathExtension == "json" }) else { return [] }
+        return [.orphanedInstall(configPath: hooksFile.path)]
+    }
+
+    private struct HookCommand {
+        let key: String
+        let command: String
+    }
+
+    private static func hookCommandsByKey(in root: [String: Any]) -> [HookCommand] {
         guard let hooks = root["hooks"] as? [String: Any] else { return [] }
-        var commands: [String] = []
-        for (_, value) in hooks {
-            for group in (value as? [[String: Any]]) ?? [] {
-                for hook in (group["hooks"] as? [[String: Any]]) ?? [] {
-                    if let command = hook["command"] as? String {
-                        commands.append(command)
-                    }
+        return hooks.flatMap { key, value in
+            ((value as? [[String: Any]]) ?? []).flatMap { group in
+                ((group["hooks"] as? [[String: Any]]) ?? []).compactMap { hook in
+                    (hook["command"] as? String).map { HookCommand(key: key, command: $0) }
                 }
             }
         }
-        return commands
     }
 
     private static func isVibePetCommand(_ command: String) -> Bool {
-        command.contains(HooksBinaryLocator.binaryName)
+        guard let executable = HookCommandShell.firstArgument(in: command) else { return false }
+        return (executable as NSString).lastPathComponent == HooksBinaryLocator.binaryName
     }
 
-    /// The binary path recorded in a command, handling Codex's shell-quoting and
-    /// Claude's unquoted (possibly space-containing) path with no arguments.
+    private static func hasCodexToolArgument(_ command: String) -> Bool {
+        command.range(of: #"(?:^|\s)--tool\s+codex(?:\s|$)"#, options: .regularExpression) != nil
+    }
+
     static func recordedBinaryPath(from command: String) -> String {
         let trimmed = command.trimmingCharacters(in: .whitespaces)
-        for quote in ["'", "\""] where trimmed.hasPrefix(quote) {
-            let body = trimmed.dropFirst()
-            if let end = body.firstIndex(of: Character(quote)) {
-                return String(body[body.startIndex..<end])
-            }
+        if (trimmed.hasPrefix("'") || trimmed.hasPrefix("\"")),
+           let executable = HookCommandShell.firstArgument(in: trimmed) {
+            return executable
         }
-        // Unquoted: strip a trailing " --flag …" argument list if present.
         if let range = trimmed.range(of: " --") {
             return String(trimmed[trimmed.startIndex..<range.lowerBound])
         }
         return trimmed
     }
 
+    private static func standardizedPath(_ path: String?) -> String? {
+        path.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+    }
+
+    private static func managedSettingsPath(_ url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
     private static func commandName(from command: String) -> String {
-        let path = recordedBinaryPath(from: command)
+        let path = HookCommandShell.firstArgument(in: command) ?? recordedBinaryPath(from: command)
         let name = (path as NSString).lastPathComponent
         return name.isEmpty ? path : name
+    }
+
+    private static func deduplicated(_ issues: [HookHealthReport.Issue]) -> [HookHealthReport.Issue] {
+        issues.reduce(into: []) { result, issue in
+            if !result.contains(issue) { result.append(issue) }
+        }
     }
 }

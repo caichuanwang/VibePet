@@ -19,6 +19,8 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     /// Used when a `Stop` event carries no displayable summary.
     static let completionFallback = "Claude Code 完成了一轮任务"
     static let notificationFallback = "Claude Code 有新通知"
+    static let maximumTranscriptBytes = 4 * 1024 * 1024
+    static let maximumTranscriptLines = 2_000
     /// Title shown above the structured-question card when `AskUserQuestion` carries
     /// no overall title of its own.
     static let askQuestionTitle = "Claude 需要你确认"
@@ -108,7 +110,9 @@ public struct ClaudeCodeAdapter: ToolAdapter {
             return Data()
         }
     }
+}
 
+extension ClaudeCodeAdapter {
     // MARK: - PermissionRequest → approval
 
     /// Builds an `.approval` envelope from a `PermissionRequest` event.
@@ -365,18 +369,40 @@ public struct ClaudeCodeAdapter: ToolAdapter {
     }
 
     /// Extracts the last assistant text message from a Claude Code transcript
-    /// (newline-delimited JSON). Defensive against schema drift: anything it can't
-    /// read returns nil so the caller falls back.
+    /// (newline-delimited JSON). Reads regular files only, rejects files over 4 MiB,
+    /// and inspects at most the last 2,000 lines. Any I/O or schema failure returns nil
+    /// so the hook falls back without blocking or loading an unbounded transcript.
     static func readTranscriptSummary(path: String) -> String? {
-        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+        let fileDescriptor = Darwin.open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard fileDescriptor >= 0 else { return nil }
+        defer { _ = Darwin.close(fileDescriptor) }
+
+        var fileInfo = stat()
+        guard Darwin.fstat(fileDescriptor, &fileInfo) == 0,
+              (fileInfo.st_mode & S_IFMT) == S_IFREG,
+              fileInfo.st_size >= 0,
+              fileInfo.st_size <= maximumTranscriptBytes else {
             return nil
         }
 
-        let lines = contents.split(separator: "\n", omittingEmptySubsequences: true)
-        for line in lines.reversed() {
+        var transcript = Data()
+        transcript.reserveCapacity(Int(fileInfo.st_size))
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            let bytesRead = Darwin.read(fileDescriptor, &buffer, buffer.count)
+            if bytesRead == 0 { break }
+            if bytesRead < 0 {
+                if errno == EINTR { continue }
+                return nil
+            }
+            guard transcript.count + bytesRead <= maximumTranscriptBytes else { return nil }
+            transcript.append(contentsOf: buffer.prefix(bytesRead))
+        }
+
+        let lines = transcript.split(separator: 0x0A, omittingEmptySubsequences: true)
+        for line in lines.suffix(maximumTranscriptLines).reversed() {
             guard
-                let data = line.data(using: .utf8),
-                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
                 object["type"] as? String == "assistant",
                 let message = object["message"] as? [String: Any],
                 let content = message["content"] as? [[String: Any]]

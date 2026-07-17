@@ -42,22 +42,24 @@ final class BridgeRoundTripTests: XCTestCase {
         XCTAssertEqual(response, BridgeResponseEnvelope(requestId: expectedRequestId, response: .defer))
     }
 
-    func testServerReplacesStaleSocketFile() async throws {
+    func testServerRefusesToReplaceOrdinaryFileAtSocketPath() async throws {
         let root = try TemporaryDirectory()
         let socketPath = SocketPath(applicationSupportRoot: root.url)
         _ = try socketPath.prepareDirectory()
-        FileManager.default.createFile(atPath: socketPath.socketURL.path, contents: Data("stale".utf8))
+        let contents = Data("do-not-delete".utf8)
+        FileManager.default.createFile(atPath: socketPath.socketURL.path, contents: contents)
 
         let server = BridgeServer(socketPath: socketPath) { envelope in
             BridgeResponseEnvelope(requestId: envelope.requestId, response: .defer)
         }
 
-        try await server.start()
-        defer {
-            server.stop()
+        do {
+            try await server.start()
+            XCTFail("Expected ordinary socket-path file protection")
+        } catch let error as BridgeServerError {
+            XCTAssertEqual(error, .unsafeSocketPath(path: socketPath.socketURL.path))
         }
-
-        XCTAssertEqual(try permissions(at: socketPath.socketURL), 0o600)
+        XCTAssertEqual(try Data(contentsOf: socketPath.socketURL), contents)
     }
 
     func testSecondServerDoesNotReplaceLiveSocket() async throws {

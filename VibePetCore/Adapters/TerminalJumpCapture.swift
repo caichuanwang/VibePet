@@ -30,7 +30,7 @@ public struct TerminalJumpCapture: @unchecked Sendable {
 
     public typealias CommandRunner = (_ executable: String, _ arguments: [String]) -> CommandResult?
     public typealias CurrentTTYProvider = () -> String?
-    public typealias TerminalLocator = (_ terminalApp: String) -> LocatorSnapshot?
+    public typealias TerminalLocator = (_ terminalApp: String, _ terminalTTY: String?) -> LocatorSnapshot?
 
     private let commandRunner: CommandRunner
     private let currentTTYProvider: CurrentTTYProvider?
@@ -41,7 +41,7 @@ public struct TerminalJumpCapture: @unchecked Sendable {
             Self.defaultCommandRunner(executable: executable, arguments: arguments)
         },
         currentTTYProvider: CurrentTTYProvider? = nil,
-        terminalLocator: @escaping TerminalLocator = Self.defaultTerminalLocator(for:)
+        terminalLocator: @escaping TerminalLocator = Self.defaultTerminalLocator(for:matchingTTY:)
     ) {
         self.commandRunner = commandRunner
         self.currentTTYProvider = currentTTYProvider
@@ -118,15 +118,19 @@ public struct TerminalJumpCapture: @unchecked Sendable {
 
         switch terminalApp {
         case "iTerm", "Terminal":
-            snapshot = terminalLocator(terminalApp)
-        case "Ghostty" where Self.isSafeGhosttyLocatorEvent(hookEventName):
-            snapshot = terminalLocator(terminalApp)
+            if let tty,
+               let candidate = terminalLocator(terminalApp, tty),
+               normalizeTTY(candidate.tty) == tty {
+                snapshot = candidate
+            }
         default:
             snapshot = nil
         }
 
         let sessionID = terminalApp == "cmux" ? Self.nonEmpty(env["CMUX_SURFACE_ID"]) : snapshot?.sessionID
-        let terminalTTY = snapshot?.tty ?? tty
+        // A process-derived TTY identifies the hook's actual terminal. A frontmost
+        // locator result may enrich its session/title, but may never replace that TTY.
+        let terminalTTY = tty ?? snapshot?.tty
         let paneTitle = snapshot?.title
 
         guard terminalApp != "Unknown" || workingDirectory != nil || terminalTTY != nil else {
@@ -141,15 +145,6 @@ public struct TerminalJumpCapture: @unchecked Sendable {
             terminalSessionID: sessionID,
             terminalTTY: terminalTTY
         )
-    }
-
-    private static func isSafeGhosttyLocatorEvent(_ hookEventName: String?) -> Bool {
-        switch hookEventName {
-        case "SessionStart", "UserPromptSubmit", "sessionStart", "userPromptSubmit":
-            true
-        default:
-            false
-        }
     }
 
     public static func defaultCommandRunner(
@@ -178,13 +173,26 @@ public struct TerminalJumpCapture: @unchecked Sendable {
         }
     }
 
-    public static func defaultTerminalLocator(for terminalApp: String) -> LocatorSnapshot? {
+    public static func defaultTerminalLocator(for terminalApp: String, matchingTTY: String? = nil) -> LocatorSnapshot? {
+        let escapedTTY = escapeAppleScript(matchingTTY)
         let script: String
         switch terminalApp {
         case "iTerm":
             script = """
             tell application "iTerm"
                 if not (it is running) then return ""
+                if "\(escapedTTY)" is not "" then
+                    repeat with aWindow in windows
+                        repeat with aTab in tabs of aWindow
+                            repeat with s in sessions of aTab
+                                if (tty of s as text) is "\(escapedTTY)" then
+                                    return (id of s as text) & "\t" & (tty of s as text) & "\t" & (name of s as text)
+                                end if
+                            end repeat
+                        end repeat
+                    end repeat
+                    return ""
+                end if
                 set s to current session of current window
                 return (id of s as text) & "\t" & (tty of s as text) & "\t" & (name of s as text)
             end tell
@@ -193,6 +201,16 @@ public struct TerminalJumpCapture: @unchecked Sendable {
             script = """
             tell application "Terminal"
                 if not (it is running) then return ""
+                if "\(escapedTTY)" is not "" then
+                    repeat with aWindow in windows
+                        repeat with t in tabs of aWindow
+                            if (tty of t as text) is "\(escapedTTY)" then
+                                return "\t" & (tty of t as text) & "\t" & (custom title of t as text)
+                            end if
+                        end repeat
+                    end repeat
+                    return ""
+                end if
                 set t to selected tab of front window
                 return "\t" & (tty of t as text) & "\t" & (custom title of t as text)
             end tell
@@ -228,6 +246,12 @@ public struct TerminalJumpCapture: @unchecked Sendable {
         } catch {
             return nil
         }
+    }
+
+    private static func escapeAppleScript(_ value: String?) -> String {
+        (value ?? "")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     public static func parseLocatorOutput(_ output: String) -> LocatorSnapshot? {

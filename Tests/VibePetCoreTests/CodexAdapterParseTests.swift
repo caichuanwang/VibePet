@@ -63,25 +63,42 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertEqual(envelope.source.jumpTarget?.workingDirectory, "/Users/dev/Projects/VibePet")
     }
 
-    func testNotifyAgentTurnCompletePrefersSessionIDWhenPresent() throws {
+    func testNotifyAgentTurnCompleteUsesFixtureBackedThreadIDOnly() throws {
         let stdin = try json([
             "type": "agent-turn-complete",
-            "session_id": "codex-session-full",
             "thread-id": "codex-thread-1",
+            "session_id": "unverified-session-alias",
+            "thread_id": "unverified-thread-alias",
+            "turn-id": "turn-is-not-a-session",
             "cwd": "/Users/dev/Projects/VibePet",
             "last-assistant-message": "Done",
         ])
 
         let envelope = try XCTUnwrap(adapter.parseEvent(stdin: stdin, env: [:]))
 
-        XCTAssertEqual(envelope.source.sessionID, "codex-session-full")
+        XCTAssertEqual(envelope.source.sessionID, "codex-thread-1")
         XCTAssertEqual(envelope.source.jumpTarget?.terminalApp, "Unknown")
         XCTAssertEqual(envelope.source.jumpTarget?.workingDirectory, "/Users/dev/Projects/VibePet")
         guard case let .sessionCompleted(sessionID, _, summary, _, _) = envelope.agentEvent else {
             return XCTFail("Expected sessionCompleted, got \(String(describing: envelope.agentEvent))")
         }
-        XCTAssertEqual(sessionID, "codex-session-full")
+        XCTAssertEqual(sessionID, "codex-thread-1")
         XCTAssertEqual(summary, "Done")
+    }
+
+    func testNotifyDoesNotTreatUnverifiedAliasesAsSessionIdentity() throws {
+        let stdin = try json([
+            "type": "agent-turn-complete",
+            "session_id": "hook-only-session",
+            "thread_id": "unverified-thread",
+            "turn-id": "turn-is-not-a-session",
+            "last-assistant-message": "Done",
+        ])
+
+        let envelope = try XCTUnwrap(adapter.parseEvent(stdin: stdin, env: [:]))
+
+        XCTAssertEqual(envelope.source.sessionID, "unknown-codex")
+        XCTAssertNil(envelope.agentEvent)
     }
 
     func testStopHookBecomesCompletion() throws {
@@ -120,11 +137,12 @@ final class CodexAdapterParseTests: XCTestCase {
     func testSourceInfoCarriesHookCapturedJumpTarget() throws {
         let adapter = CodexAdapter(terminalJumpCapture: TerminalJumpCapture(
             currentTTYProvider: { "/dev/ttys003" },
-            terminalLocator: { app in
+            terminalLocator: { app, tty in
                 XCTAssertEqual(app, "iTerm")
+                XCTAssertEqual(tty, "/dev/ttys003")
                 return TerminalJumpCapture.LocatorSnapshot(
                     sessionID: "iterm-session",
-                    tty: "/dev/ttys333",
+                    tty: "/dev/ttys003",
                     title: "Codex"
                 )
             }
@@ -138,7 +156,7 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertEqual(envelope.source.jumpTarget?.terminalApp, "iTerm")
         XCTAssertEqual(envelope.source.jumpTarget?.workspaceName, "VibePet")
         XCTAssertEqual(envelope.source.jumpTarget?.terminalSessionID, "iterm-session")
-        XCTAssertEqual(envelope.source.jumpTarget?.terminalTTY, "/dev/ttys333")
+        XCTAssertEqual(envelope.source.jumpTarget?.terminalTTY, "/dev/ttys003")
         XCTAssertEqual(envelope.source.jumpTarget?.paneTitle, "Codex")
     }
 
@@ -190,14 +208,11 @@ final class CodexAdapterParseTests: XCTestCase {
         XCTAssertNil(try adapter.parseEvent(stdin: Data("not json".utf8), env: [:]))
     }
 
-    func testAnswerRequiringRequestDowngradesToTerminalApproval() throws {
+    func testUnverifiedAnswerRequiringToolDoesNotInventTerminalCapability() throws {
         let envelope = try XCTUnwrap(adapter.parseEvent(stdin: fixture("permission-request-ask-question.json"), env: [:]))
         let content = try approval(envelope)
-        XCTAssertTrue(content.requiresTerminalApproval)
-        // It must NOT become a `.question` (Codex hooks cannot fill answers back).
-        if case .question = envelope.content {
-            XCTFail("Codex answer-requiring request must downgrade to approval, not question")
-        }
+        XCTAssertFalse(content.requiresTerminalApproval)
+        XCTAssertNil(content.alwaysAllow)
     }
 
     // MARK: - Helpers

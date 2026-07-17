@@ -26,9 +26,9 @@ public struct ToolInstallStatus: Equatable, Sendable {
 }
 
 /// Orchestrates install / uninstall / status for each tool, driven by the manifest
-/// (technical design §4.3). Install is idempotent (skips when already installed at
-/// the current binary version), backs up the original config before writing, and
-/// records exactly what it wrote so uninstall is precise and reversible.
+/// (technical design §4.3). Install reconciles only VibePet-managed entries, backs
+/// up the original config before first write, and records exactly what it wrote so
+/// uninstall is precise and reversible.
 public struct HookInstaller: Sendable {
     private let applicationSupportRoot: URL?
     private let store: InstallManifestStore
@@ -50,56 +50,26 @@ public struct HookInstaller: Sendable {
 
     @discardableResult
     public func install(tool: ToolKind, hookBinarySource: URL) throws -> ToolInstallRecord {
-        guard let writer = writers[tool] else {
-            throw InstallError.noWriter(tool)
-        }
-
-        var manifest = store.read()
-        // Copy/upgrade the shared binary (no-op if present and current).
-        try binaryInstaller.install(
-            from: hookBinarySource,
-            version: currentBinaryVersion,
-            installedVersion: manifest.hookBinaryVersion
+        try reconcile(
+            tool: tool,
+            hookBinarySource: hookBinarySource,
+            refreshUnknownCodexOwnership: false
         )
-        manifest.hookBinaryVersion = currentBinaryVersion
-
-        // Idempotent: already installed and current → only persist a possible binary version bump.
-        // If the managed hook set changed, rewrite config so existing users pick up
-        // additions or removals such as retiring status-only lifecycle hooks.
-        if let existing = manifest.tools[tool.rawValue],
-           existing.installed,
-           Set(existing.writtenHooks) == Set(writer.managedHookKeys) {
-            try store.write(manifest)
-            return existing
-        }
-
-        let previous = manifest.tools[tool.rawValue]
-        let backupPath: String?
-        if let previousBackupPath = previous?.backupPath {
-            backupPath = previousBackupPath
-        } else {
-            backupPath = try backUpIfPresent(writer)
-        }
-        try writer.install(arguments: Self.arguments(for: tool))
-
-        let record = ToolInstallRecord(
-            installed: true,
-            activationState: previous?.activationState ?? Self.defaultActivation(for: tool),
-            settingsPath: writer.configURL.path,
-            writtenHooks: writer.managedHookKeys,
-            backupPath: backupPath
-        )
-        manifest.tools[tool.rawValue] = record
-        try store.write(manifest)
-        return record
     }
 
     public func uninstall(tool: ToolKind) throws {
         guard let writer = writers[tool] else { return }
-        var manifest = store.read()
+        var manifest = try store.readStrict()
         guard manifest.tools[tool.rawValue] != nil else { return }
 
-        try writer.uninstall()
+        let record = manifest.tools[tool.rawValue]
+        let receipt: ToolConfigInstallReceipt
+        if tool == .codex {
+            receipt = .codexFeature(record?.codexFeatureStateBeforeInstall ?? .unknown)
+        } else {
+            receipt = .none
+        }
+        try writer.uninstall(receipt: receipt)
         manifest.tools.removeValue(forKey: tool.rawValue)
 
         // Drop the shared binary once no tool references it.
@@ -110,43 +80,15 @@ public struct HookInstaller: Sendable {
         try store.write(manifest)
     }
 
-    /// Forces a config rewrite to clear the drift `HookHealthCheck` reports (moved
-    /// binary, hand-edited JSON, removed hook, disabled Codex flag, orphaned install).
-    /// Unlike `install`, it does not short-circuit when the manifest says "installed",
-    /// since the whole point is that the on-disk state no longer matches the manifest.
-    /// A prior activation state is preserved so a trusted Codex isn't pushed back to
-    /// "needs trust" by a repair.
+    /// Repair and install share the same reconciliation path. Both rewrite managed
+    /// config from current disk state while preserving the first pristine backup.
     @discardableResult
     public func repair(tool: ToolKind, hookBinarySource: URL) throws -> ToolInstallRecord {
-        guard let writer = writers[tool] else {
-            throw InstallError.noWriter(tool)
-        }
-
-        var manifest = store.read()
-        // Re-copy the binary if missing/behind/changed, then rewrite the config.
-        try binaryInstaller.install(
-            from: hookBinarySource,
-            version: currentBinaryVersion,
-            installedVersion: manifest.hookBinaryVersion
+        try reconcile(
+            tool: tool,
+            hookBinarySource: hookBinarySource,
+            refreshUnknownCodexOwnership: true
         )
-        manifest.hookBinaryVersion = currentBinaryVersion
-
-        // No fresh backup: the first install already preserved the user's pristine
-        // config, and the on-disk file now carries VibePet's own entries. Re-rewrite
-        // it and keep the original backup reference.
-        try writer.install(arguments: Self.arguments(for: tool))
-
-        let previous = manifest.tools[tool.rawValue]
-        let record = ToolInstallRecord(
-            installed: true,
-            activationState: previous?.activationState ?? Self.defaultActivation(for: tool),
-            settingsPath: writer.configURL.path,
-            writtenHooks: writer.managedHookKeys,
-            backupPath: previous?.backupPath
-        )
-        manifest.tools[tool.rawValue] = record
-        try store.write(manifest)
-        return record
     }
 
     /// Per-tool detection + status for the settings page and onboarding step ③,
@@ -168,11 +110,25 @@ public struct HookInstaller: Sendable {
 
     public func health(tool: ToolKind) -> HookHealthReport? {
         guard let writer = writers[tool] else { return nil }
+        let manifest: InstallManifest
+        let malformedManifestPath: String?
+        do {
+            manifest = try store.readStrict()
+            malformedManifestPath = nil
+        } catch {
+            manifest = InstallManifest()
+            malformedManifestPath = store.manifestURL.path
+        }
+        let record = manifest.tools[tool.rawValue]
         return HookHealthCheck.check(
             tool: tool,
             writer: writer,
             managedBinaryURL: binaryInstaller.binaryURL,
-            recordedInstalled: status(tool: tool) != .notInstalled
+            recordedInstalled: record?.installed == true,
+            recordedRecord: record,
+            recordedBinaryVersion: manifest.hookBinaryVersion,
+            expectedBinaryVersion: currentBinaryVersion,
+            manifestMalformedPath: malformedManifestPath
         )
     }
 
@@ -199,6 +155,63 @@ public struct HookInstaller: Sendable {
     }
 
     // MARK: - Helpers
+
+    private func reconcile(
+        tool: ToolKind,
+        hookBinarySource: URL,
+        refreshUnknownCodexOwnership: Bool
+    ) throws -> ToolInstallRecord {
+        guard let writer = writers[tool] else {
+            throw InstallError.noWriter(tool)
+        }
+
+        var manifest = try store.readStrict()
+        let previous = manifest.tools[tool.rawValue]
+        try binaryInstaller.install(
+            from: hookBinarySource,
+            version: currentBinaryVersion,
+            installedVersion: manifest.hookBinaryVersion
+        )
+        manifest.hookBinaryVersion = currentBinaryVersion
+
+        let backupPath: String?
+        if let previous {
+            // A nil first-install backup is meaningful: there was no pristine user
+            // config. Never back up VibePet's own generated config on a later install.
+            backupPath = previous.backupPath
+        } else {
+            backupPath = try backUpIfPresent(writer)
+        }
+        let receipt = try writer.installWithReceipt(arguments: Self.arguments(for: tool))
+        let observedCodexFeatureState: CodexFeatureStateBeforeInstall
+        if case let .codexFeature(state) = receipt {
+            observedCodexFeatureState = state
+        } else {
+            observedCodexFeatureState = .unknown
+        }
+        let codexFeatureState: CodexFeatureStateBeforeInstall
+        if let previous,
+           !(refreshUnknownCodexOwnership && previous.codexFeatureStateBeforeInstall == .unknown) {
+            // Never reinterpret a legacy unknown receipt after VibePet may already have
+            // enabled the feature during ordinary install. Explicit repair is the only
+            // operation allowed to establish a new conservative ownership baseline.
+            codexFeatureState = previous.codexFeatureStateBeforeInstall
+        } else {
+            codexFeatureState = observedCodexFeatureState
+        }
+
+        let record = ToolInstallRecord(
+            installed: true,
+            activationState: previous?.activationState ?? Self.defaultActivation(for: tool),
+            settingsPath: writer.configURL.path,
+            writtenHooks: writer.managedHookKeys,
+            backupPath: backupPath,
+            codexFeatureStateBeforeInstall: codexFeatureState
+        )
+        manifest.tools[tool.rawValue] = record
+        try store.write(manifest)
+        return record
+    }
 
     public enum InstallError: Error, Equatable, Sendable {
         case noWriter(ToolKind)

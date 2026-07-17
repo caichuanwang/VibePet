@@ -1,6 +1,13 @@
 import Foundation
 
 enum BridgeSocketIO {
+    static let maximumFrameBytes = 4 * 1024 * 1024
+    typealias FileControl = (_ fileDescriptor: Int32, _ command: Int32, _ value: Int32) -> Int32
+
+    struct SocketFileIdentity: Equatable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+    }
     private static let installSignalHandling: Void = {
         _ = Darwin.signal(SIGPIPE, SIG_IGN)
     }()
@@ -61,7 +68,11 @@ enum BridgeSocketIO {
     /// Connects to a Unix socket with a bounded deadline. Uses a non-blocking
     /// connect + `poll` so a missing or stalled peer cannot block the caller past
     /// `timeout` (TD-4). Returns a connected, blocking fd on success.
-    static func connect(to path: String, timeout: TimeInterval) throws -> Int32 {
+    static func connect(
+        to path: String,
+        timeout: TimeInterval,
+        fileControl: FileControl = { Darwin.fcntl($0, $1, $2) }
+    ) throws -> Int32 {
         var address = try socketAddress(for: path)
         let length = addressLength(for: path)
 
@@ -70,8 +81,17 @@ enum BridgeSocketIO {
             throw BridgeSocketError.connectFailed(errno)
         }
 
-        let originalFlags = fcntl(fileDescriptor, F_GETFL, 0)
-        _ = fcntl(fileDescriptor, F_SETFL, originalFlags | O_NONBLOCK)
+        let originalFlags = fileControl(fileDescriptor, F_GETFL, 0)
+        guard originalFlags >= 0 else {
+            let failure = errno
+            close(fileDescriptor)
+            throw BridgeSocketError.connectFailed(failure)
+        }
+        guard fileControl(fileDescriptor, F_SETFL, originalFlags | O_NONBLOCK) == 0 else {
+            let failure = errno
+            close(fileDescriptor)
+            throw BridgeSocketError.connectFailed(failure)
+        }
 
         let connectResult = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
@@ -111,7 +131,11 @@ enum BridgeSocketIO {
             }
         }
 
-        _ = fcntl(fileDescriptor, F_SETFL, originalFlags)
+        guard fileControl(fileDescriptor, F_SETFL, originalFlags) == 0 else {
+            let failure = errno
+            close(fileDescriptor)
+            throw BridgeSocketError.connectFailed(failure)
+        }
         disableSigPipe(fileDescriptor)
         return fileDescriptor
     }
@@ -153,7 +177,33 @@ enum BridgeSocketIO {
         )
     }
 
-    static func writeLine(_ data: Data, to fileDescriptor: Int32) throws {
+    static func writeLine(
+        _ data: Data,
+        to fileDescriptor: Int32,
+        absoluteTimeout: TimeInterval? = nil
+    ) throws {
+        guard data.count <= maximumFrameBytes else {
+            throw BridgeSocketError.frameTooLarge(maximumFrameBytes)
+        }
+        let deadlineNanoseconds = absoluteTimeout.map { timeout -> UInt64 in
+            let duration = UInt64(max(0, timeout) * 1_000_000_000)
+            return DispatchTime.now().uptimeNanoseconds &+ duration
+        }
+        let originalFlags: Int32?
+        if deadlineNanoseconds != nil {
+            let flags = fcntl(fileDescriptor, F_GETFL, 0)
+            guard flags >= 0, fcntl(fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                throw BridgeSocketError.writeFailed(errno)
+            }
+            originalFlags = flags
+        } else {
+            originalFlags = nil
+        }
+        defer {
+            if let originalFlags {
+                _ = fcntl(fileDescriptor, F_SETFL, originalFlags)
+            }
+        }
         var payload = data
         payload.append(0x0A)
         try payload.withUnsafeBytes { rawBuffer in
@@ -163,6 +213,11 @@ enum BridgeSocketIO {
 
             var bytesWritten = 0
             while bytesWritten < rawBuffer.count {
+                if let deadlineNanoseconds {
+                    guard DispatchTime.now().uptimeNanoseconds < deadlineNanoseconds else {
+                        throw BridgeSocketError.writeTimedOut
+                    }
+                }
                 let result = Darwin.write(
                     fileDescriptor,
                     baseAddress.advanced(by: bytesWritten),
@@ -170,7 +225,17 @@ enum BridgeSocketIO {
                 )
 
                 if result < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    if (errno == EAGAIN || errno == EWOULDBLOCK), let deadlineNanoseconds {
+                        try waitUntilWritable(fileDescriptor, deadlineNanoseconds: deadlineNanoseconds)
+                        continue
+                    }
                     throw BridgeSocketError.writeFailed(errno)
+                }
+                guard result > 0 else {
+                    throw BridgeSocketError.connectionClosed
                 }
 
                 bytesWritten += result
@@ -178,11 +243,126 @@ enum BridgeSocketIO {
         }
     }
 
-    static func readLine(from fileDescriptor: Int32) throws -> Data {
+    private static func waitUntilWritable(
+        _ fileDescriptor: Int32,
+        deadlineNanoseconds: UInt64
+    ) throws {
+        while true {
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadlineNanoseconds else {
+                throw BridgeSocketError.writeTimedOut
+            }
+            let remainingNanoseconds = deadlineNanoseconds - now
+            let milliseconds = max(
+                1,
+                min(Int64(Int32.max), Int64((remainingNanoseconds + 999_999) / 1_000_000))
+            )
+            var descriptor = pollfd(
+                fd: fileDescriptor,
+                events: Int16(POLLOUT | POLLHUP | POLLERR),
+                revents: 0
+            )
+            let pollResult = Darwin.poll(&descriptor, 1, Int32(milliseconds))
+            if pollResult == 0 {
+                throw BridgeSocketError.writeTimedOut
+            }
+            if pollResult < 0 {
+                if errno == EINTR { continue }
+                throw BridgeSocketError.writeFailed(errno)
+            }
+            if descriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 {
+                throw BridgeSocketError.connectionClosed
+            }
+            if descriptor.revents & Int16(POLLOUT) != 0 {
+                return
+            }
+        }
+    }
+
+    static func readLine(
+        from fileDescriptor: Int32,
+        maximumBytes: Int = maximumFrameBytes,
+        absoluteTimeout: TimeInterval? = nil
+    ) throws -> Data {
+        precondition(maximumBytes > 0)
+
+        let deadlineNanoseconds = absoluteTimeout.map { timeout -> UInt64 in
+            let duration = UInt64(max(0, timeout) * 1_000_000_000)
+            return DispatchTime.now().uptimeNanoseconds &+ duration
+        }
         var data = Data()
-        var byte: UInt8 = 0
+        var socketBuffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var isSocket: Bool?
 
         while true {
+            if let deadlineNanoseconds {
+                let now = DispatchTime.now().uptimeNanoseconds
+                guard now < deadlineNanoseconds else {
+                    throw BridgeSocketError.readTimedOut
+                }
+                let remainingNanoseconds = deadlineNanoseconds - now
+                let milliseconds = max(1, min(Int64(Int32.max), Int64((remainingNanoseconds + 999_999) / 1_000_000)))
+                var descriptor = pollfd(
+                    fd: fileDescriptor,
+                    events: Int16(POLLIN | POLLHUP | POLLERR),
+                    revents: 0
+                )
+                let pollResult = Darwin.poll(&descriptor, 1, Int32(milliseconds))
+                if pollResult == 0 {
+                    throw BridgeSocketError.readTimedOut
+                }
+                if pollResult < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    throw BridgeSocketError.readFailed(errno)
+                }
+                if descriptor.revents & Int16(POLLNVAL) != 0 {
+                    throw BridgeSocketError.connectionClosed
+                }
+            }
+
+            if isSocket != false {
+                let flags = MSG_PEEK | (deadlineNanoseconds == nil ? 0 : MSG_DONTWAIT)
+                let result = Darwin.recv(fileDescriptor, &socketBuffer, socketBuffer.count, flags)
+                if result > 0 {
+                    isSocket = true
+                    let count = Int(result)
+                    let newlineIndex = socketBuffer[..<count].firstIndex(of: 0x0A)
+                    let contentCount = newlineIndex ?? count
+                    guard data.count + contentCount <= maximumBytes else {
+                        throw BridgeSocketError.frameTooLarge(maximumBytes)
+                    }
+                    data.append(contentsOf: socketBuffer[..<contentCount])
+                    try consumeSocketBytes(
+                        newlineIndex.map { $0 + 1 } ?? count,
+                        from: fileDescriptor,
+                        deadlineNanoseconds: deadlineNanoseconds
+                    )
+                    if newlineIndex != nil {
+                        return data
+                    }
+                    continue
+                }
+                if result == 0 {
+                    if data.isEmpty {
+                        throw BridgeSocketError.connectionClosed
+                    }
+                    return data
+                }
+                if errno == EINTR {
+                    continue
+                }
+                if errno == ENOTSOCK {
+                    isSocket = false
+                } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                    throw BridgeSocketError.readTimedOut
+                } else {
+                    throw BridgeSocketError.readFailed(errno)
+                }
+            }
+
+            var byte: UInt8 = 0
             let result = Darwin.read(fileDescriptor, &byte, 1)
 
             if result == 0 {
@@ -193,6 +373,9 @@ enum BridgeSocketIO {
             }
 
             if result < 0 {
+                if errno == EINTR {
+                    continue
+                }
                 // SO_RCVTIMEO expiry surfaces as EAGAIN / EWOULDBLOCK.
                 if errno == EAGAIN || errno == EWOULDBLOCK {
                     throw BridgeSocketError.readTimedOut
@@ -204,8 +387,102 @@ enum BridgeSocketIO {
                 return data
             }
 
+            guard data.count < maximumBytes else {
+                throw BridgeSocketError.frameTooLarge(maximumBytes)
+            }
             data.append(byte)
         }
+    }
+
+    private static func consumeSocketBytes(
+        _ count: Int,
+        from fileDescriptor: Int32,
+        deadlineNanoseconds: UInt64?
+    ) throws {
+        var consumed = 0
+        var buffer = [UInt8](repeating: 0, count: min(count, 64 * 1024))
+        while consumed < count {
+            if let deadlineNanoseconds,
+               DispatchTime.now().uptimeNanoseconds >= deadlineNanoseconds {
+                throw BridgeSocketError.readTimedOut
+            }
+            let result = Darwin.read(
+                fileDescriptor,
+                &buffer,
+                min(buffer.count, count - consumed)
+            )
+            if result > 0 {
+                consumed += Int(result)
+                continue
+            }
+            if result == 0 {
+                throw BridgeSocketError.connectionClosed
+            }
+            if errno == EINTR {
+                continue
+            }
+            if errno == EAGAIN || errno == EWOULDBLOCK {
+                throw BridgeSocketError.readTimedOut
+            }
+            throw BridgeSocketError.readFailed(errno)
+        }
+    }
+
+    enum PeerEvent: Equatable {
+        case none
+        case disconnected
+        case unexpectedInput
+    }
+
+    static func pendingPeerEvent(_ fileDescriptor: Int32) -> PeerEvent {
+        var descriptor = pollfd(
+            fd: fileDescriptor,
+            events: Int16(POLLIN | POLLHUP | POLLERR),
+            revents: 0
+        )
+        let result = Darwin.poll(&descriptor, 1, 0)
+        guard result > 0 else { return .none }
+        if descriptor.revents & Int16(POLLERR | POLLNVAL) != 0 {
+            return .disconnected
+        }
+        if descriptor.revents & Int16(POLLIN) != 0 {
+            var byte: UInt8 = 0
+            let peeked = Darwin.recv(fileDescriptor, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
+            if peeked > 0 { return .unexpectedInput }
+            if peeked == 0 { return .disconnected }
+        }
+        if descriptor.revents & Int16(POLLHUP) != 0 {
+            return .disconnected
+        }
+        return .none
+    }
+
+    static func shutdown(_ fileDescriptor: Int32) {
+        guard fileDescriptor >= 0 else { return }
+        _ = Darwin.shutdown(fileDescriptor, SHUT_RDWR)
+    }
+
+    static func verifiedSocketIdentity(at url: URL) throws -> SocketFileIdentity? {
+        var info = stat()
+        if Darwin.lstat(url.path, &info) != 0 {
+            if errno == ENOENT { return nil }
+            throw BridgeServerError.unsafeSocketPath(path: url.path)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFSOCK, info.st_uid == geteuid() else {
+            throw BridgeServerError.unsafeSocketPath(path: url.path)
+        }
+        return SocketFileIdentity(
+            device: UInt64(info.st_dev),
+            inode: UInt64(info.st_ino)
+        )
+    }
+
+    static func removeSocket(at url: URL, matching expectedIdentity: SocketFileIdentity? = nil) throws {
+        guard let currentIdentity = try verifiedSocketIdentity(at: url) else { return }
+        if let expectedIdentity, currentIdentity != expectedIdentity {
+            throw BridgeServerError.unsafeSocketPath(path: url.path)
+        }
+        try FileManager.default.removeItem(at: url)
     }
 
     static func close(_ fileDescriptor: Int32) {
@@ -230,6 +507,9 @@ final class BridgeServerState: @unchecked Sendable {
     private var wakeWriteFileDescriptor: Int32 = -1
     private var isStopped = false
     private var didStart = false
+    private var acceptedFileDescriptors: Set<Int32> = []
+    private var socketURL: URL?
+    private var socketIdentity: BridgeSocketIO.SocketFileIdentity?
     private let finished = DispatchSemaphore(value: 0)
     private let handlingQueue = DispatchQueue(
         label: "VibePet.BridgeServer.handling",
@@ -239,11 +519,12 @@ final class BridgeServerState: @unchecked Sendable {
 
     func startAccepting(
         listenFileDescriptor: Int32,
+        socketURL: URL,
+        socketIdentity: BridgeSocketIO.SocketFileIdentity,
         handle: @escaping @Sendable (Int32) -> Void
     ) throws {
         var pipeDescriptors: [Int32] = [-1, -1]
         guard Darwin.pipe(&pipeDescriptors) == 0 else {
-            BridgeSocketIO.close(listenFileDescriptor)
             throw BridgeServerError.listenFailed(path: "")
         }
 
@@ -251,17 +532,19 @@ final class BridgeServerState: @unchecked Sendable {
 
         lock.lock()
         if isStopped {
-            // stop() ran before the listener was registered; don't start a thread.
+            // stop() ran before the listener was registered. The caller still owns
+            // the listen fd and bound socket path and will clean both up on throw.
             lock.unlock()
-            BridgeSocketIO.close(listenFileDescriptor)
             BridgeSocketIO.close(pipeDescriptors[0])
             BridgeSocketIO.close(pipeDescriptors[1])
-            return
+            throw BridgeServerError.serverStopped
         }
         let wakeRead = pipeDescriptors[0]
         self.listenFileDescriptor = listenFileDescriptor
         self.wakeReadFileDescriptor = wakeRead
         self.wakeWriteFileDescriptor = pipeDescriptors[1]
+        self.socketURL = socketURL
+        self.socketIdentity = socketIdentity
         self.didStart = true
         lock.unlock()
 
@@ -321,8 +604,23 @@ final class BridgeServerState: @unchecked Sendable {
                 let clientFlags = fcntl(clientFileDescriptor, F_GETFL, 0)
                 _ = fcntl(clientFileDescriptor, F_SETFL, clientFlags & ~O_NONBLOCK)
                 BridgeSocketIO.disableSigPipe(clientFileDescriptor)
-                handlingQueue.async {
+                lock.lock()
+                let shouldHandle = !isStopped
+                if shouldHandle {
+                    acceptedFileDescriptors.insert(clientFileDescriptor)
+                }
+                lock.unlock()
+                guard shouldHandle else {
+                    BridgeSocketIO.close(clientFileDescriptor)
+                    break
+                }
+                handlingQueue.async { [weak self] in
                     handle(clientFileDescriptor)
+                    if let self {
+                        self.connectionFinished(clientFileDescriptor)
+                    } else {
+                        BridgeSocketIO.close(clientFileDescriptor)
+                    }
                 }
             } else if listenEvents != 0 {
                 // Listen fd error / hangup / invalid (e.g. closed) → end the loop.
@@ -331,7 +629,14 @@ final class BridgeServerState: @unchecked Sendable {
         }
     }
 
-    func stop(socketURL: URL) {
+    private func connectionFinished(_ fileDescriptor: Int32) {
+        lock.lock()
+        acceptedFileDescriptors.remove(fileDescriptor)
+        BridgeSocketIO.close(fileDescriptor)
+        lock.unlock()
+    }
+
+    func stop() {
         lock.lock()
         if isStopped {
             lock.unlock()
@@ -341,19 +646,28 @@ final class BridgeServerState: @unchecked Sendable {
         let listenFileDescriptor = self.listenFileDescriptor
         let wakeRead = wakeReadFileDescriptor
         let wakeWrite = wakeWriteFileDescriptor
+        let accepted = acceptedFileDescriptors
         let didStart = self.didStart
+        let socketURL = self.socketURL
+        let socketIdentity = self.socketIdentity
         self.listenFileDescriptor = -1
         wakeReadFileDescriptor = -1
         wakeWriteFileDescriptor = -1
+        self.socketURL = nil
+        self.socketIdentity = nil
+        // Interrupt under the same lock that connectionFinished uses before close,
+        // preventing a completed fd from being reused between snapshot and shutdown.
+        for fileDescriptor in accepted {
+            BridgeSocketIO.shutdown(fileDescriptor)
+        }
         lock.unlock()
 
         guard didStart else {
-            // No accept thread was ever started; nothing to wake or join.
             return
         }
 
-        // Wake the accept thread out of poll, then wait for it to leave the loop
-        // before closing the descriptors it polls (avoids closing fds under poll).
+        // Wake accept and interrupt every accepted read/decision wait. Handler queues
+        // retain ownership of close(); shutdown only makes their blocking I/O finish.
         if wakeWrite >= 0 {
             var byte: UInt8 = 1
             _ = Darwin.write(wakeWrite, &byte, 1)
@@ -363,7 +677,9 @@ final class BridgeServerState: @unchecked Sendable {
         BridgeSocketIO.close(listenFileDescriptor)
         BridgeSocketIO.close(wakeRead)
         BridgeSocketIO.close(wakeWrite)
-        try? FileManager.default.removeItem(at: socketURL)
+        if let socketURL, let socketIdentity {
+            try? BridgeSocketIO.removeSocket(at: socketURL, matching: socketIdentity)
+        }
     }
 }
 
@@ -375,4 +691,6 @@ enum BridgeSocketError: Error, Equatable {
     case connectFailed(Int32)
     case connectTimedOut
     case readTimedOut
+    case writeTimedOut
+    case frameTooLarge(Int)
 }

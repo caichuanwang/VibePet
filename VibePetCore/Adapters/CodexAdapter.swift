@@ -5,8 +5,7 @@ import Foundation
 /// Two delivery surfaces, both arriving here as `Data`:
 /// - **`PermissionRequest` hook** (JSON on stdin): shell escalation → `.command`,
 ///   `apply_patch` → `.fileChange`, risk-classified, binary allow/deny. An
-///   answer-requiring request (Codex hooks cannot fill answers back — `updatedInput`
-///   "fails closed") downgrades to `.approval(requiresTerminalApproval: true)`.
+///   unverified input-requiring tool names receive no invented capability.
 /// - **`notify` program** (`agent-turn-complete`, JSON passed as argv by Codex):
 ///   → `.completion`.
 ///
@@ -24,11 +23,6 @@ public struct CodexAdapter: ToolAdapter {
     private let terminalJumpCapture: TerminalJumpCapture
 
     static let completionFallback = "Codex 完成了一轮任务"
-    static let terminalApprovalTitle = "需在终端处理"
-    /// Tool names whose request needs free-form user input rather than a binary
-    /// allow/deny. Provisional: mirrors Claude's `AskUserQuestion` name pending a
-    /// real Codex session (see `Tests/Fixtures/codex/codex-spike-notes.md`).
-    static let freeformInputTools: Set<String> = ["AskUserQuestion"]
 
     public init() {
         self.init(riskClassifier: RiskClassifier())
@@ -51,7 +45,7 @@ public struct CodexAdapter: ToolAdapter {
         // VibePet installs the `Stop` hook instead, but notify is still parsed for
         // robustness if a user wires it up.
         if (object["type"] as? String) == "agent-turn-complete" {
-            let source = makeSource(from: object, env: env, sessionKeys: ["session_id", "thread-id", "thread_id", "turn-id"])
+            let source = makeSource(from: object, env: env, sessionKeys: ["thread-id"])
             return makeCompletionEnvelope(
                 summary: (object["last-assistant-message"] as? String).flatMap(nonEmpty),
                 source: source,
@@ -93,7 +87,7 @@ public struct CodexAdapter: ToolAdapter {
             return nil
         }
         if (object["type"] as? String) == "agent-turn-complete" {
-            let source = makeSource(from: object, env: env, sessionKeys: ["session_id", "thread-id", "thread_id", "turn-id"])
+            let source = makeSource(from: object, env: env, sessionKeys: ["thread-id"])
             return makeCompletionEvent(from: object, source: source)
         }
         if (object["hook_event_name"] as? String) == "PostToolUse" {
@@ -123,18 +117,6 @@ public struct CodexAdapter: ToolAdapter {
         let source = makeSource(from: object, env: env)
         let agentEvent = makeAgentEvent(from: object, source: source)
         let input = object["tool_input"] as? [String: Any] ?? [:]
-
-        if Self.freeformInputTools.contains(toolName) {
-            let summary = (input["description"] as? String).flatMap(nonEmpty) ?? toolName
-            let content = ApprovalContent(
-                title: Self.terminalApprovalTitle,
-                risk: .medium,
-                preview: .generic(summary: summary),
-                alwaysAllow: nil,
-                requiresTerminalApproval: true
-            )
-            return makeEnvelope(source: source, content: .approval(content), agentEvent: agentEvent)
-        }
 
         let preview = Self.actionPreview(toolName: toolName, input: input)
         let command = Self.isShellTool(toolName) ? (input["command"] as? String) : nil
@@ -323,8 +305,7 @@ public struct CodexAdapter: ToolAdapter {
     }
 
     private func makeCompletionEvent(from object: [String: Any], source: SourceInfo) -> AgentEvent? {
-        let keys = ["session_id", "thread-id", "thread_id", "turn-id"]
-        guard let sessionID = keys.lazy.compactMap({ (object[$0] as? String).flatMap(nonEmpty) }).first else {
+        guard let sessionID = (object["thread-id"] as? String).flatMap(nonEmpty) else {
             return nil
         }
         return .sessionCompleted(

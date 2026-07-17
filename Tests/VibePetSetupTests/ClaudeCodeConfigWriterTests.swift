@@ -100,6 +100,86 @@ final class ClaudeCodeConfigWriterTests: XCTestCase {
         }
     }
 
+    func testInstallAndUninstallPreserveUserHookSharingManagedMatcherGroup() throws {
+        let url = try emptyConfig()
+        try Data("""
+        {
+          "hooks": {
+            "PermissionRequest": [
+              {
+                "matcher": "shared",
+                "hooks": [
+                  { "type": "command", "command": "'\(binaryPath)'" },
+                  { "type": "command", "command": "/usr/local/bin/user-claude-hook" }
+                ]
+              }
+            ]
+          }
+        }
+        """.utf8).write(to: url)
+        let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
+
+        try writer.install(arguments: [])
+        var hooks = try hooksObject(url)
+        XCTAssertTrue(commands(in: hooks, key: "PermissionRequest").contains("/usr/local/bin/user-claude-hook"))
+
+        try writer.uninstall()
+        hooks = try hooksObject(url)
+        XCTAssertEqual(commands(in: hooks, key: "PermissionRequest"), ["/usr/local/bin/user-claude-hook"])
+    }
+
+    func testMutationRejectsUncertainHookShapesWithoutChangingBytes() throws {
+        let payloads = [
+            #"{"hooks":"custom"}"#,
+            #"{"hooks":{"PermissionRequest":{"hooks":[]}}}"#,
+            #"{"hooks":{"PermissionRequest":[{"hooks":"custom"}]}}"#,
+        ]
+
+        for payload in payloads {
+            for mutate in [
+                { (writer: ClaudeCodeConfigWriter) in try writer.install(arguments: []) },
+                { (writer: ClaudeCodeConfigWriter) in try writer.uninstall() },
+            ] {
+                let url = try emptyConfig()
+                let original = Data(payload.utf8)
+                try original.write(to: url)
+                let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
+
+                XCTAssertThrowsError(try mutate(writer), "payload: \(payload)")
+                XCTAssertEqual(try Data(contentsOf: url), original, "payload: \(payload)")
+            }
+        }
+    }
+
+    func testExactExecutableOwnershipHandlesApostropheAndPreservesWrapper() throws {
+        let apostrophePath = "/Users/O'Brien/Library/Application Support/VibePet/bin/VibePetHooks"
+        let url = try emptyConfig()
+        let wrapper = "/usr/local/bin/wrapper '\(apostrophePath)'"
+        try Data("""
+        {
+          "hooks": {
+            "PermissionRequest": [
+              { "matcher": "wrapper", "hooks": [ { "type": "command", "command": "\(wrapper)" } ] }
+            ]
+          }
+        }
+        """.utf8).write(to: url)
+        let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: apostrophePath)
+
+        try writer.install(arguments: [])
+        try writer.install(arguments: [])
+
+        var hooks = try hooksObject(url)
+        let installedCommands = commands(in: hooks, key: "PermissionRequest")
+        XCTAssertEqual(installedCommands.filter { $0 == wrapper }, [wrapper])
+        XCTAssertEqual(installedCommands.filter { $0 != wrapper }.count, 1)
+
+        try writer.uninstall()
+
+        hooks = try hooksObject(url)
+        XCTAssertEqual(commands(in: hooks, key: "PermissionRequest"), [wrapper])
+    }
+
     func testPermissionRequestCarriesFiniteDecisionTimeoutButOthersDoNot() throws {
         let url = try emptyConfig()
         let writer = ClaudeCodeConfigWriter(configURL: url, hookBinaryPath: binaryPath)
