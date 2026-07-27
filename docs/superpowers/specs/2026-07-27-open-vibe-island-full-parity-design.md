@@ -1,7 +1,7 @@
 # VibePet Open Vibe Island Full-Parity Migration Design
 
 **Date:** 2026-07-27
-**Status:** Draft for user review
+**Status:** Approved
 **Upstream baseline:** `open-vibe-island` commit `1e26dfc8d42bec0da7627986d49c2320b2593610`
 
 ## 1. Context
