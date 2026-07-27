@@ -66,3 +66,6 @@ fastlane/test_output
 
 # Local Serena workspace state
 .serena/
+
+# Local feature worktrees
+.worktrees/
