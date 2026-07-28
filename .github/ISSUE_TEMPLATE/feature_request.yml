@@ -1,0 +1,98 @@
+name: "✨ Feature request"
+description: "Propose an improvement based on a concrete user need"
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement. Start with the problem and desired outcome rather than only a preferred implementation.
+
+        Before continuing, read the [pinned issue guide](https://github.com/caichuanwang/VibePet/issues/2).
+
+        VibePet is local-first and currently focuses on macOS 14+, Claude Code, Codex, and Codex-format spritesheet pets.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: "Before submitting"
+      options:
+        - label: "I searched open and closed issues and did not find an existing proposal."
+          required: true
+        - label: "This request describes one focused problem or outcome."
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: "Area"
+      options:
+        - "Desktop pet, bubbles, or menu bar"
+        - "Claude Code integration"
+        - "Codex integration"
+        - "Hook installation or setup"
+        - "Pet assets or import"
+        - "Terminal jump-back"
+        - "Documentation or contributor experience"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem or use case"
+      description: "Who has this problem, when does it occur, and why is the current behavior insufficient?"
+      placeholder: "When ..., I need ..., because ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: "Desired outcome"
+      description: "Describe the smallest useful result. Avoid prescribing implementation details unless they are essential."
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: "Example workflow"
+      description: "Walk through a concrete example of how this would be used."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives or workarounds"
+      description: "What have you tried, and why is it not sufficient?"
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: "Privacy, fail-open, and scope considerations"
+      description: "Note any network access, telemetry, stored data, permissions, new agent support, or effect on native fallback behavior. Write 'None known' if not applicable."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: "Contribution"
+      description: "Would you be interested in helping with the implementation after maintainers agree on scope?"
+      options:
+        - "Yes, I can open a pull request"
+        - "Yes, I can help test or document it"
+        - "Maybe, with guidance"
+        - "No"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: "Additional context"
+      description: "Add mockups, references, or other context if useful."
