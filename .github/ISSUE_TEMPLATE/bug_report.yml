@@ -1,0 +1,116 @@
+name: "🐛 Bug report"
+description: "Report a reproducible problem in VibePet"
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please provide enough detail for someone else to reproduce it.
+
+        Before continuing, read the [pinned issue guide](https://github.com/caichuanwang/VibePet/issues/2). Never include secrets, tokens, private prompts, or other sensitive data.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: "Before submitting"
+      options:
+        - label: "I searched open and closed issues and did not find a duplicate."
+          required: true
+        - label: "I removed secrets and private information from logs and screenshots."
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: "Affected area"
+      description: "Where does the problem appear?"
+      options:
+        - "Desktop pet, bubbles, or menu bar"
+        - "Claude Code integration"
+        - "Codex integration"
+        - "Hook installation or setup"
+        - "Pet assets or import"
+        - "Terminal jump-back"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: "Problem summary"
+      description: "Describe the problem and its impact in a few sentences."
+      placeholder: "What happened, and what were you trying to do?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "Steps to reproduce"
+      description: "Provide the smallest reliable reproduction you can."
+      placeholder: |
+        1. Install or launch ...
+        2. Start a Claude Code/Codex session ...
+        3. Trigger ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected behavior"
+      placeholder: "What should have happened?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: "Actual behavior"
+      placeholder: "What happened instead? Include exact error text when useful."
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: "Environment"
+      description: "Use 'not applicable' for fields that do not matter."
+      value: |
+        - macOS version:
+        - Mac model / Apple Silicon or Intel:
+        - VibePet version or commit:
+        - Installation method (source build/release):
+        - AI tool and version (Claude Code/Codex):
+        - Terminal app:
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: "Redacted logs, screenshots, or recordings"
+      description: "Attach only the minimal diagnostics needed. Remove credentials, usernames, private prompts/session content, and identifying paths."
+
+  - type: dropdown
+    id: fallback
+    attributes:
+      label: "Native fallback behavior"
+      description: "If VibePet is closed or unavailable, does the AI tool continue with its native flow?"
+      options:
+        - "Yes"
+        - "No"
+        - "Not tested"
+        - "Not applicable"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: "Additional context"
+      description: "Add anything else that may help investigation, such as frequency, regression range, or workaround."
