@@ -17,7 +17,7 @@ VibePet keeps AI coding sessions visible without making you watch a terminal. Th
 Everything runs on your Mac. VibePet does not require an account, cloud service, telemetry, or remote generation.
 
 > [!IMPORTANT]
-> VibePet is an early-stage, source-first project. There are currently no published binary releases; build it with Swift Package Manager. Tool hook formats and user-facing behavior may still change between commits.
+> VibePet is an early-stage project. GitHub binary releases are ad-hoc signed but are not signed with an Apple Developer ID or notarized by Apple, so Gatekeeper will warn on first launch. Tool hook formats and user-facing behavior may still change between releases.
 
 ## Why VibePet?
 
@@ -43,11 +43,47 @@ VibePet currently targets Claude Code and Codex only. Support for Cursor, Gemini
 ## Requirements
 
 - macOS 14 or newer
-- Xcode or an Apple Swift toolchain with Swift 6 support
+- The universal GitHub release, or Xcode/an Apple Swift toolchain with Swift 6 support for source builds
 - Claude Code and/or Codex for agent integration
 - A Codex-format pet package (`pet.json` plus its spritesheet), either in the shared Codex pet directory or imported locally
 
-The repository does not currently include a bundled pet or prebuilt `.app` release.
+The release does not include a bundled pet; choose an existing Codex-format pet or import one during onboarding.
+
+## Download and install
+
+1. Download `VibePet-v<version>-macos-universal.zip` and `SHA256SUMS` from the [latest GitHub Release](https://github.com/caichuanwang/VibePet/releases/latest).
+2. Verify the archive checksum before bypassing Gatekeeper:
+
+   ```sh
+   cd ~/Downloads
+   shasum -a 256 VibePet-v*-macos-universal.zip
+   cat SHA256SUMS
+   ```
+
+   The hash printed for the ZIP must exactly match the corresponding entry in `SHA256SUMS`.
+3. Unzip the archive and drag `VibePet.app` into `/Applications`.
+4. Open VibePet. Because the release is not Apple-notarized, follow one of the methods below if macOS blocks it.
+
+### If macOS reports an unidentified developer or quarantine
+
+Only bypass Gatekeeper for an archive downloaded from this repository's official Releases page whose SHA-256 checksum matches.
+
+**Method 1: System Settings (recommended)**
+
+1. Try to open VibePet once and dismiss the warning.
+2. Open **System Settings → Privacy & Security**.
+3. Find the VibePet warning and click **Open Anyway**, then confirm **Open**.
+
+**Method 2: Terminal**
+
+Remove the quarantine attribute only from the installed VibePet app, then launch it:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/VibePet.app
+open /Applications/VibePet.app
+```
+
+If the first command reports a permission error, run that command once with `sudo`. Do not use this command on apps from untrusted sources.
 
 ### Get a pet for your first run
 
