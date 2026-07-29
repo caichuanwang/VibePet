@@ -1,38 +1,74 @@
 # VibePet
 
-VibePet is a native macOS desktop pet for vibe coding workflows. An animated 2D pet lives on your desktop and acts as a visible approval surface for AI coding tools such as Claude Code and Codex: when an agent needs you to allow, deny, or answer something, VibePet surfaces it in a desktop bubble so you can act without hunting through terminal windows.
+[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](https://www.apple.com/macos/)
+[![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)](https://www.swift.org/)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
-The pet also reflects ongoing session state (running a tool / waiting on you / done / failed), aggregates multiple sessions across terminals and tools, and lets you double-click any bubble to jump back to the terminal it came from. Pets use the standard Codex pet format (spritesheet) sourced in place from `~/.codex/pets/`, so VibePet hosts the wider Codex pet ecosystem.
+**An open-source, local-first macOS desktop pet for Claude Code and Codex.**
 
-VibePet is **local-first**: bridge transport, hook handling, pet sourcing, and rendering all run on the user's machine. No account, cloud sync, telemetry, or remote generation is required.
+VibePet keeps AI coding sessions visible without making you watch a terminal. The pet changes animation as agents work, surfaces approvals and questions in desktop bubbles, aggregates multiple sessions, and can jump back to the terminal that needs attention.
 
-VibePet is a **GPL-3.0 open-source project**. The project currently does not use buyout, subscription, or in-app-purchase pricing.
+![Hand-drawn illustration of VibePet showing a desktop pet beside a local coding agent approval](imgs/vibepet-hero.png)
 
-See the [PRD](docs/VibePet-PRD.md) for product direction, architecture, and the code map.
+*Concept illustration — not a product screenshot.*
 
-## Current Status
+Everything runs on your Mac. VibePet does not require an account, cloud service, telemetry, or remote generation.
 
-The repository contains the Swift Package and the core implementation — normalized bridge models, Unix socket transport, the Claude Code / Codex tool adapters, the manifest-driven hook installer, configuration and asset persistence, and the floating pet window with bubbles — plus unit and end-to-end tests.
+> [!IMPORTANT]
+> VibePet is an early-stage, source-first project. There are currently no published binary releases; build it with Swift Package Manager. Tool hook formats and user-facing behavior may still change between commits.
 
-Work in progress is designed in [`docs/superpowers/specs/`](docs/superpowers/specs/): a persistent multi-session `SessionState` reducer with full hook-lifecycle coverage, the Codex spritesheet pet host, and terminal jump-back.
+## Why VibePet?
+
+Coding agents are most useful when they can run in the background, but permission prompts and questions are easy to miss once their terminal is covered. VibePet turns those hidden waiting states into a small, persistent desktop surface:
+
+- **See what agents are doing** — pet animations reflect running, waiting, completed, failed, and idle states.
+- **Respond from the desktop** — allow, deny, or answer supported prompts directly in a bubble.
+- **Track more than one session** — menu-bar counts and the session dashboard aggregate Claude Code and Codex activity across terminals.
+- **Jump back to the source** — return to the originating terminal or editor when captured context is available.
+- **Use Codex-format pets** — discover pets in `${CODEX_HOME:-~/.codex}/pets/` or import a local folder/ZIP package.
+
+## Supported integrations
+
+| Integration | Current support | Notes |
+| --- | --- | --- |
+| Claude Code | Approvals, structured questions, notifications, and session lifecycle | Desktop answers to `AskUserQuestion` require Claude Code 2.1.85 or newer. Known Claude Code regressions may still show the native prompt; VibePet falls back rather than blocking. |
+| Codex | Approvals, turn-completion notifications, and partial session lifecycle | Codex may require trusting the installed hook through `/hooks`. Questions that cannot be answered through the hook API fall back to the terminal. |
+
+Terminal jump-back has dedicated handling for **Apple Terminal, iTerm2, Ghostty, cmux, and VS Code**, with a safer app/working-directory fallback when an exact session cannot be resolved.
+
+VibePet currently targets Claude Code and Codex only. Support for Cursor, Gemini, Windows, and Linux is not part of the current scope.
 
 ## Requirements
 
 - macOS 14 or newer
-- Xcode toolchain with Swift 6 support
+- Xcode or an Apple Swift toolchain with Swift 6 support
+- Claude Code and/or Codex for agent integration
+- A Codex-format pet package (`pet.json` plus its spritesheet), either in the shared Codex pet directory or imported locally
 
-## Quick Start
+The repository does not currently include a bundled pet or prebuilt `.app` release.
 
-Build all package targets:
+### Get a pet for your first run
+
+If Codex has already installed pets under `${CODEX_HOME:-~/.codex}/pets/`, VibePet discovers them automatically. You can also create a compatible pet with OpenAI's curated [`hatch-pet` skill](https://github.com/openai/skills/tree/main/skills/.curated/hatch-pet) or try a pet from the third-party [Awesome Codex Pets](https://github.com/gennadi-kuzmin/awesome-codex-pets) collection.
+
+For example:
 
 ```sh
-swift build
+git clone --depth 1 https://github.com/gennadi-kuzmin/awesome-codex-pets.git /tmp/awesome-codex-pets
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/pets"
+cp -R /tmp/awesome-codex-pets/pets/terminal-ghost "${CODEX_HOME:-$HOME/.codex}/pets/"
 ```
 
-Run the test suite:
+Community pets are separate projects; review their source and license before installing them.
+
+## Build and run from source
+
+Clone and build all targets:
 
 ```sh
-swift test
+git clone https://github.com/caichuanwang/VibePet.git
+cd VibePet
+swift build
 ```
 
 Launch the app:
@@ -41,84 +77,208 @@ Launch the app:
 swift run VibePetApp
 ```
 
-Run the helper CLIs:
+On first launch, onboarding lets you:
 
-```sh
-swift run VibePetHooks   # hook bridge helper (invoked by AI tools)
-swift run VibePetSetup   # install / uninstall hook configuration
-```
+1. choose a pet already available under `${CODEX_HOME:-~/.codex}/pets/`;
+2. import a Codex-format pet folder or ZIP file; and
+3. install VibePet hooks for detected Claude Code and Codex installations.
 
-## Package Layout
+Imported pets are copied to:
 
 ```text
-VibePetCore/    Shared, UI-independent logic:
-                  Bridge/      normalized envelope + Unix socket transport + hook runtime
-                  Adapters/    Claude Code / Codex tool adapters + risk classifier
-                  Install/     manifest-driven hook installer (idempotent, precise uninstall)
-                  Persistence/ config + pet asset storage
-                  Geometry/    bubble anchoring, screen snap, sprite hit-mask
-                  Pet/         pet state machine
-VibePetApp/     macOS app: floating pet window, bubbles, menu bar, settings, bridge host
-VibePetHooks/   CLI invoked by AI tool hooks
-VibePetSetup/   CLI that installs/uninstalls hook configuration
-Tests/          XCTest suite (core, app, setup, E2E) and fixtures
-docs/           PRD (long-lived), current-version specs, and archived docs
-openspec/       Executable specifications and archived changes
+~/Library/Application Support/VibePet/pets/
 ```
 
-`VibePetCore` is intentionally UI-independent so it can be shared by the app, hook CLI, setup CLI, and tests. It must not import AppKit or SwiftUI.
+After onboarding, keep VibePet running while you use Claude Code or Codex. Open the menu-bar item to see active/attention counts or manage pet visibility, pet switching, import, and settings. Click the desktop pet to open the session dashboard.
 
-## Architecture Overview
+### Install hooks from the CLI
 
-The hook ↔ app bridge uses a Unix domain socket (newline-delimited JSON) at `~/Library/Application Support/VibePet/bridge.sock`, with two channels:
+The app can manage hooks through onboarding and Settings. The setup CLI provides the same core operations for source builds:
 
-1. `VibePetHooks` receives a tool event from Claude Code or Codex on stdin.
-2. A `ToolAdapter` normalizes the tool-specific payload into a `BridgeEnvelope`.
-3. `BridgeClient` sends it over the socket to `VibePetApp`'s `BridgeServer`.
-4. The app renders the appropriate pet bubble:
-   - **Decision channel (blocking):** approval / question events block the hook while the user acts in the bubble; the response is returned over the same connection and encoded back into the tool's expected stdout.
-   - **Notification channel (non-blocking):** completion / status and lifecycle events fire-and-forget.
-5. If anything fails — app not running, socket error, malformed input, or timeout — hooks **fail open** (`defer`) so the developer is never blocked.
+```sh
+swift run VibePetSetup install all
+swift run VibePetSetup status
+swift run VibePetSetup doctor
+```
 
-The app holds a persistent `SessionState` reducer as the single source of truth; both channels feed it, and the pet's animation plus the menu-bar counts are derived from aggregated multi-session state. See the [PRD](docs/VibePet-PRD.md) §3 and the specs for details.
+Install only one integration when needed:
 
-## Documentation Map
+```sh
+swift run VibePetSetup install claude
+swift run VibePetSetup install codex
+```
 
-- [PRD (long-lived main document)](docs/VibePet-PRD.md) — product direction, architecture, code map, cross-cutting technical approach
-- [Current-version specs](docs/superpowers/specs/) — session model + full hooks, Codex pet host, terminal jump-back
-- [Archived docs](docs/archive/) — historical PRD, technical plan, task breakdown, code archive
-- [Contributor guide](AGENTS.md) — repository conventions, commands, commit guidance
-- [OpenSpec project specs](openspec/specs/)
+For `install all`, an integration is changed automatically only when its primary configuration file already exists. Use an explicit `install claude` or `install codex` command when you want to install it regardless.
 
-Read the PRD for product intent and architecture; read the relevant spec in `docs/superpowers/specs/` before starting a new implementation slice.
+The installer copies `VibePetHooks` to the stable location below instead of leaving tool configuration pointed into `.build/`:
 
-## Testing
+```text
+~/Library/Application Support/VibePet/bin/VibePetHooks
+```
 
-The project uses XCTest. Tests are split across `Tests/VibePetCoreTests/` (core logic), `Tests/VibePetAppTests/` (app layer), `Tests/VibePetSetupTests/` (installer), and `Tests/E2E/` (end-to-end approval/question/notification flows).
+It manages only VibePet-owned entries in Claude Code and Codex configuration, records installation state in a manifest, and preserves unrelated user hooks. After installing Codex integration, open `/hooks` in Codex if trust confirmation is requested.
+
+### Diagnose or uninstall hooks
+
+Check installation drift without changing configuration:
+
+```sh
+swift run VibePetSetup doctor
+```
+
+Remove VibePet-managed hook entries while preserving unrelated configuration:
+
+```sh
+swift run VibePetSetup uninstall all
+```
+
+You can also uninstall one integration with `uninstall claude` or `uninstall codex`.
+
+## Pet package format
+
+VibePet uses the Codex spritesheet pet format:
+
+```text
+my-pet/
+├── pet.json
+└── spritesheet.webp
+```
+
+The atlas must be exactly **1536 × 1872 pixels**: 8 columns × 9 rows, with each frame occupying a **192 × 208 pixel** cell. Transparent PNG and WebP spritesheets are supported when referenced by the manifest.
+
+A minimal `pet.json` is:
+
+```json
+{
+  "id": "my-pet",
+  "displayName": "My Pet",
+  "description": "A tiny coding companion.",
+  "spritesheetPath": "spritesheet.webp"
+}
+```
+
+`id`, `displayName`, and `spritesheetPath` are required; `description` is optional. The spritesheet path must stay inside the pet folder. VibePet currently derives its runtime slug from the folder name—or the ZIP filename for a root-level imported package—so choose that name carefully when replacing or overriding a pet.
+
+Pet sources are combined as follows:
+
+- **Shared Codex library:** `${CODEX_HOME:-~/.codex}/pets/` is read in place.
+- **VibePet imports:** folders and ZIP packages selected through onboarding or the menu are validated and copied into VibePet application support.
+- If an imported pet and a shared pet use the same slug, the imported copy takes precedence.
+
+VibePet does not download pets or provide an in-app online gallery.
+
+## Privacy and safety
+
+VibePet is designed around two non-negotiable boundaries.
+
+### Local-first
+
+Bridge traffic uses a local Unix domain socket. Pet discovery, hook handling, session state, configuration, and rendering stay on the Mac. The project does not add:
+
+- accounts or cloud sync;
+- telemetry or analytics uploads;
+- remote pet generation;
+- prompt/session uploads; or
+- an online pet marketplace.
+
+### Fail-open
+
+Agent integrations must not depend on VibePet being healthy. If the app is not running, the socket cannot connect, input is malformed, or a decision times out, the hook defers to the coding tool's native flow instead of hanging the agent.
+
+Please treat any regression in native fallback behavior as a high-priority bug.
+
+## Local data and reset
+
+VibePet keeps its managed state under:
+
+```text
+~/Library/Application Support/VibePet/
+```
+
+This includes app configuration, imported pets, the bridge socket, the stable hook helper, and the install manifest/backups. The shared Codex pet library under `${CODEX_HOME:-~/.codex}/pets/` is external data and is not part of VibePet's application state.
+
+To return VibePet to a first-launch state:
+
+1. Quit VibePet.
+2. Run `swift run VibePetSetup uninstall all` so managed hook entries are removed safely.
+3. Confirm uninstall succeeded, then delete `~/Library/Application Support/VibePet/`.
+4. Launch VibePet again.
+
+If the install manifest is missing or damaged, do **not** trust an `uninstalled` CLI message or delete application support first—the CLI may have had no managed record to remove. Manually remove only hook entries that reference `~/Library/Application Support/VibePet/bin/VibePetHooks` from `~/.claude/settings.json` and `${CODEX_HOME:-~/.codex}/hooks.json`; Codex-managed groups may also carry `statusMessage: "Managed by VibePet"`. Remove VibePet-managed Codex feature flags only when no other Codex hooks remain.
+
+Do not delete all of `~/.claude/` or `~/.codex/`; those directories may contain unrelated user configuration and pets.
+
+## Architecture
+
+![Hand-drawn architecture showing two local coding agents flowing through hooks and a Unix socket into VibePet](imgs/vibepet-architecture.png)
+
+The Swift package is split into four products:
+
+```text
+VibePetCore/    UI-independent models, adapters, bridge, installer, persistence, and pet logic
+VibePetApp/     SwiftUI/AppKit desktop app, pet window, bubbles, dashboard, settings, and bridge host
+VibePetHooks/   Small fail-open hook CLI used by Claude Code and Codex
+VibePetSetup/   Install, uninstall, status, and diagnostics CLI
+Tests/          Core, app, setup, and end-to-end XCTest suites
+docs/           Product requirements, current design specs, and archived design history
+```
+
+For the complete product and technical rationale, see the [PRD](docs/VibePet-PRD.md).
+
+## Development
+
+Build the package:
+
+```sh
+swift build
+```
+
+Run the full test suite:
 
 ```sh
 swift test
 ```
 
-Notes:
+Confirm package products and target membership:
 
-- Installer/config-writer logic is verified by **unit tests only** — never real install smoke tests, since writes hit the real `~/.codex` / `~/.claude` even with `$HOME` overridden.
-- A full `swift test` run may occasionally die with an intermittent SIGPIPE (signal 13) mid-run despite zero failures; re-run or use `--filter` rather than treating it as a regression.
+```sh
+swift package describe --type json
+```
 
-## Privacy and Safety
-
-VibePet is local-first: no account, cloud sync, telemetry, or remote generation service is required. Do not add network generation, telemetry, or upload paths without an explicit product change and user authorization design.
-
-Hook and bridge changes must preserve **fail-open** behavior: if VibePet is not running, cannot connect, times out, or encounters malformed input, AI coding tools must fall back to their native approval flow instead of hanging.
-
-## Acknowledgements
-
-VibePet explicitly draws architectural and implementation inspiration from [open-vibe-island](https://github.com/Octane0411/open-vibe-island) by Octane0411 and its contributors. In particular, its package split, normalized hook and session models, Unix-socket bridge, hook installer patterns, and terminal jump-back approach informed VibePet's design. VibePet adapts those ideas to its own scope and models, replacing the notch-oriented interface with a desktop pet and a Codex spritesheet pet host.
+Installer and configuration-writer behavior must be tested with temporary files and unit tests. Do not use real install smoke tests in automated development workflows because the tool configuration paths resolve to the real `~/.claude` and `~/.codex` locations even when `$HOME` is overridden.
 
 ## Contributing
 
-Keep changes small and tied to a documented spec. Prefer adding or updating focused XCTest coverage for bridge encoding, adapter behavior, persistence, the installer, and fail-open paths. See [AGENTS.md](AGENTS.md) for repository conventions, commands, and commit guidance.
+Contributions, bug reports, and focused feature proposals are welcome.
+
+- Read the [issue guide](.github/ISSUE_GUIDE.md) before opening a report.
+- Use the [Issue chooser](https://github.com/caichuanwang/VibePet/issues/new/choose) for bugs and feature requests.
+- For larger changes, read the relevant documents in [`docs/superpowers/specs/`](docs/superpowers/specs/) and discuss scope before implementation.
+- Keep changes small, preserve the local-first and fail-open boundaries, and add focused XCTest coverage where behavior changes.
+- Submit changes through a pull request; `master` is protected from direct pushes.
+
+The [PRD](docs/VibePet-PRD.md) and current [design specs](docs/superpowers/specs/) are optional technical context for contributors working on larger behavior changes. `AGENTS.md` contains maintainer and coding-agent workflow constraints; it is not required reading for a first contribution.
+
+### Security reports
+
+Do not publish exploit details, credentials, private prompts, or session content in a public issue. The repository does not currently expose a dedicated private vulnerability-reporting channel. If no private maintainer contact is available, open only a minimal issue asking how to report securely, without including vulnerability details.
+
+## Project scope
+
+VibePet intentionally remains focused:
+
+- macOS 14+ only;
+- Claude Code and Codex only;
+- local pet packages rather than an online gallery;
+- 2D spritesheet pets rather than 3D or LLM-driven characters; and
+- source builds and project releases rather than a committed Mac App Store distribution path.
+
+These boundaries can change through explicit product discussion, but they should not be weakened incidentally by implementation work.
+
+## Acknowledgements
+
+VibePet is inspired by [open-vibe-island](https://github.com/Octane0411/open-vibe-island) by Octane0411 and its contributors. Its target boundaries, normalized hook/session models, Unix-socket bridge, installer patterns, and terminal jump-back approach informed VibePet's architecture. VibePet adapts those ideas to a local desktop pet focused on Claude Code, Codex, and the Codex pet ecosystem.
 
 ## License
 
-VibePet is licensed under the [GNU General Public License v3.0](LICENSE).
+VibePet is free and open-source software licensed under the [GNU General Public License v3.0](LICENSE).
