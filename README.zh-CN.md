@@ -71,8 +71,21 @@ VibePet 目前只面向 Claude Code 和 Codex。Cursor、Gemini、Windows 和 Li
 **方法一：系统设置（推荐）**
 
 1. 先尝试打开一次 VibePet，然后关闭警告。
+
+   <p align="center">
+     <a href="imgs/gatekeeper-blocked.png"><img src="imgs/gatekeeper-blocked.png" alt="macOS 提示无法验证 VibePet 且未打开应用" width="360"></a>
+   </p>
+
+   *首次尝试启动后，先关闭此警告。*
+
 2. 打开“系统设置”→“隐私与安全性”。
 3. 找到 VibePet 相关提示，点击“仍要打开”，再确认“打开”。
+
+   <p align="center">
+     <a href="imgs/gatekeeper-open-anyway.png"><img src="imgs/gatekeeper-open-anyway.png" alt="macOS 隐私与安全性设置中 VibePet 的仍要打开按钮" width="720"></a>
+   </p>
+
+   *macOS 阻止首次启动后，“隐私与安全性”中会出现“仍要打开”按钮。*
 
 **方法二：终端命令**
 
