@@ -33,7 +33,10 @@ let package = Package(
         .executableTarget(
             name: "VibePetApp",
             dependencies: ["VibePetCore"],
-            path: "VibePetApp"
+            path: "VibePetApp",
+            resources: [
+                .copy("Resources/AppIcon.icns")
+            ]
         ),
         .executableTarget(
             name: "VibePetHooks",

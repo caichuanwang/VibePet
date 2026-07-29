@@ -17,7 +17,7 @@ VibePet 让 AI 编程会话保持可见，而不需要你一直盯着终端。Ag
 一切都在你的 Mac 上运行。VibePet 不需要账号、云服务、遥测或远程生成服务。
 
 > [!IMPORTANT]
-> VibePet 仍处于早期阶段，目前以源码构建为主，尚未发布可直接下载的二进制版本。请使用 Swift Package Manager 构建。工具的 Hook 格式和用户可见行为仍可能随提交发生变化。
+> VibePet 仍处于早期阶段。GitHub 二进制版本仅使用 ad-hoc 签名，没有 Apple Developer ID 签名，也未经过 Apple 公证，因此首次启动时 Gatekeeper 会发出警告。工具的 Hook 格式和用户可见行为仍可能随版本变化。
 
 ## 为什么选择 VibePet？
 
@@ -43,11 +43,47 @@ VibePet 目前只面向 Claude Code 和 Codex。Cursor、Gemini、Windows 和 Li
 ## 环境要求
 
 - macOS 14 或更高版本
-- Xcode，或支持 Swift 6 的 Apple Swift 工具链
+- GitHub 提供的通用架构版本；从源码构建时需要 Xcode 或支持 Swift 6 的 Apple Swift 工具链
 - 用于 Agent 集成的 Claude Code 和/或 Codex
 - 一个 Codex 格式的宠物包（`pet.json` 及其 spritesheet），可以来自共享 Codex 宠物目录，也可以从本地导入
 
-仓库目前不包含内置宠物或预构建的 `.app` 版本。
+发布包不包含内置宠物；请在首次启动时选择已有的 Codex 格式宠物或导入一个宠物包。
+
+## 下载与安装
+
+1. 从 [GitHub Releases 最新版本](https://github.com/caichuanwang/VibePet/releases/latest)下载 `VibePet-v<版本号>-macos-universal.zip` 和 `SHA256SUMS`。
+2. 在绕过 Gatekeeper 前验证压缩包校验值：
+
+   ```sh
+   cd ~/Downloads
+   shasum -a 256 VibePet-v*-macos-universal.zip
+   cat SHA256SUMS
+   ```
+
+   ZIP 对应的 SHA-256 必须与 `SHA256SUMS` 中的记录完全一致。
+3. 解压后将 `VibePet.app` 拖入 `/Applications`（应用程序）目录。
+4. 打开 VibePet。由于发布包没有经过 Apple 公证，如果 macOS 阻止启动，请使用下面任一方法。
+
+### 首次打开若提示“来自未知开发者/已被隔离”如何解决
+
+仅对从本仓库官方 Releases 页面下载且 SHA-256 校验一致的 VibePet 使用以下方法。
+
+**方法一：系统设置（推荐）**
+
+1. 先尝试打开一次 VibePet，然后关闭警告。
+2. 打开“系统设置”→“隐私与安全性”。
+3. 找到 VibePet 相关提示，点击“仍要打开”，再确认“打开”。
+
+**方法二：终端命令**
+
+仅移除已安装 VibePet 的隔离属性，然后启动应用：
+
+```sh
+xattr -dr com.apple.quarantine /Applications/VibePet.app
+open /Applications/VibePet.app
+```
+
+如果第一条命令提示权限不足，再仅为该命令添加一次 `sudo`。不要对来源不明的应用执行解除隔离命令。
 
 ### 为首次运行准备宠物
 
