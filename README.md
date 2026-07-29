@@ -71,8 +71,21 @@ Only bypass Gatekeeper for an archive downloaded from this repository's official
 **Method 1: System Settings (recommended)**
 
 1. Try to open VibePet once and dismiss the warning.
+
+   <p align="center">
+     <a href="imgs/gatekeeper-blocked.png"><img src="imgs/gatekeeper-blocked.png" alt="macOS warning that VibePet could not be verified and was not opened" width="360"></a>
+   </p>
+
+   *Dismiss this warning after the first launch attempt.*
+
 2. Open **System Settings → Privacy & Security**.
 3. Find the VibePet warning and click **Open Anyway**, then confirm **Open**.
+
+   <p align="center">
+     <a href="imgs/gatekeeper-open-anyway.png"><img src="imgs/gatekeeper-open-anyway.png" alt="macOS Privacy and Security settings showing the Open Anyway button for VibePet" width="720"></a>
+   </p>
+
+   *The **Open Anyway** button appears after macOS blocks the first launch attempt.*
 
 **Method 2: Terminal**
 
