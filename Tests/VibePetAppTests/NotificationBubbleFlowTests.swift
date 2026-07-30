@@ -625,11 +625,11 @@ final class NotificationBubbleFlowTests: XCTestCase {
         XCTAssertEqual(alive, ["codex-a"])
     }
 
-    func testProcessLivenessKeepsUnidentifiedSessionsAlive() {
+    func testProcessLivenessDoesNotKeepUnidentifiedSessionsAlive() {
         var state = SessionState()
         state.apply(sessionStartEnvelope().agentEvent!)
 
-        XCTAssertEqual(AgentProcessLiveness.liveSessionIDs(in: state, rows: []), ["session-full"])
+        XCTAssertEqual(AgentProcessLiveness.liveSessionIDs(in: state, rows: []), [])
     }
 
     // MARK: - Question (decide) — M5

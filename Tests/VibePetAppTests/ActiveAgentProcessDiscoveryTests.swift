@@ -14,10 +14,10 @@ final class ActiveAgentProcessDiscoveryTests: XCTestCase {
                 return psOutput
             }
             if executablePath == "/usr/sbin/lsof", arguments.contains("101") {
-                return "p101\nn/Users/test/Code/VibePet\n"
+                return "p101\nfcwd\nn/Users/test/Code/VibePet\nf20\nn/Users/test/.codex/sessions/2026/07/30/rollout-2026-07-30T10-00-00-11111111-1111-4111-8111-111111111111.jsonl\n"
             }
             if executablePath == "/usr/sbin/lsof", arguments.contains("102") {
-                return "p102\nn/Users/test/Code/Service\n"
+                return "p102\nfcwd\nn/Users/test/Code/Service\nf21\nn/Users/test/.claude/projects/-Users-test-Code-Service/22222222-2222-4222-8222-222222222222.jsonl\n"
             }
             return nil
         }
@@ -25,7 +25,14 @@ final class ActiveAgentProcessDiscoveryTests: XCTestCase {
         let sessions = discovery.discover()
 
         XCTAssertEqual(sessions.map(\.tool), [.codex, .claudeCode])
-        XCTAssertEqual(sessions.map(\.id), ["discovered-codex-101", "discovered-claudeCode-102"])
+        XCTAssertEqual(sessions.map(\.nativeSessionID), [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        ])
+        XCTAssertEqual(sessions.map(\.id), [
+            "discovered-codex-11111111-1111-4111-8111-111111111111",
+            "discovered-claudeCode-22222222-2222-4222-8222-222222222222",
+        ])
         XCTAssertEqual(sessions[0].title, "VibePet")
         XCTAssertEqual(sessions[0].jumpTarget?.workingDirectory, "/Users/test/Code/VibePet")
         XCTAssertEqual(sessions[0].jumpTarget?.terminalTTY, "ttys001")
@@ -115,7 +122,90 @@ final class ActiveAgentProcessDiscoveryTests: XCTestCase {
 
         let sessions = discovery.discover()
 
-        XCTAssertEqual(sessions.map(\.id), ["discovered-codex-104"])
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions.first?.tool, .codex)
+    }
+
+    func testExtractsClaudeSessionIDFromResumeWhenTranscriptIsUnavailable() {
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return "101 1 ttys001 /Users/test/.local/bin/claude --resume 33333333-3333-4333-8333-333333333333"
+            }
+            if executablePath == "/usr/sbin/lsof", arguments.contains("101") {
+                return "p101\nfcwd\nn/Users/test/Code/Service\n"
+            }
+            return nil
+        }
+
+        let session = discovery.discover().first
+
+        XCTAssertEqual(session?.nativeSessionID, "33333333-3333-4333-8333-333333333333")
+        XCTAssertEqual(session?.id, "discovered-claudeCode-33333333-3333-4333-8333-333333333333")
+    }
+
+    func testDiscoversNoTTYProcessWhenItHasExactTranscriptIdentity() {
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return "101 1 ?? /Users/test/.local/bin/claude"
+            }
+            if executablePath == "/usr/sbin/lsof", arguments.contains("101") {
+                return "p101\nfcwd\nn/Users/test/Code/Service\nf20\nn/Users/test/.claude/projects/project/44444444-4444-4444-8444-444444444444.jsonl\n"
+            }
+            return nil
+        }
+
+        let session = discovery.discover().first
+
+        XCTAssertEqual(session?.nativeSessionID, "44444444-4444-4444-8444-444444444444")
+        XCTAssertNil(session?.jumpTarget?.terminalTTY)
+    }
+
+    func testPIDAndWrapperChangesDoNotCreateDuplicateSyntheticIdentity() {
+        func discover(psOutput: String) -> [ActiveAgentSession] {
+            ActiveAgentProcessDiscovery { executablePath, _ in
+                if executablePath == "/bin/ps" { return psOutput }
+                if executablePath == "/usr/sbin/lsof" {
+                    return "p\nfcwd\nn/Users/test/Code/VibePet\n"
+                }
+                return nil
+            }.discover()
+        }
+
+        let first = discover(psOutput: """
+          101     1 ttys001 /opt/homebrew/bin/codex
+          202   101 ttys001 /Users/test/.nvm/lib/node_modules/@openai/codex/vendor/bin/codex
+        """)
+        let second = discover(psOutput: """
+          303     1 ttys001 /Users/test/.nvm/lib/node_modules/@openai/codex/vendor/bin/codex
+        """)
+
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(second.count, 1)
+        XCTAssertEqual(first[0].id, second[0].id)
+        XCTAssertTrue(first[0].id.hasPrefix("discovered-codex-synthetic-"))
+    }
+
+    func testIgnoresHeadlessAgentWithoutExactIdentity() {
+        let discovery = ActiveAgentProcessDiscovery { executablePath, arguments in
+            if executablePath == "/bin/ps" {
+                return "101 1 ?? /Users/test/.local/bin/claude"
+            }
+            if executablePath == "/usr/sbin/lsof", arguments.contains("101") {
+                return "p101\nfcwd\nn/Users/test/Code/Service\n"
+            }
+            return nil
+        }
+
+        XCTAssertEqual(discovery.discover(), [])
+    }
+
+    func testCommandOutputDrainsLargeStdoutWithoutDeadlock() {
+        let output = ActiveAgentProcessDiscovery.commandOutput(
+            executablePath: "/usr/bin/python3",
+            arguments: ["-c", "print('x' * 200000)"]
+        )
+
+        XCTAssertEqual(output?.count, 200_000)
     }
 
     @MainActor
@@ -290,6 +380,110 @@ final class ActiveAgentProcessDiscoveryTests: XCTestCase {
         defer { host.stop() }
 
         try await waitUntil { host.sessionStateSnapshot.sessionsByID["discovered-claudeCode-102"] != nil }
+    }
+
+    @MainActor
+    func testFailedUnifiedScanDoesNotAccumulateMissingCount() async {
+        let host = BridgeServerHost(
+            petController: PetController(surface: DiscoveryTestPetSurface()),
+            processScanProvider: { .failure },
+            livenessInterval: 60
+        )
+        host.applyForTesting(.sessionStarted(
+            sessionID: "existing",
+            timestamp: .now,
+            title: "Existing",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: nil
+        ))
+
+        await host.runLivenessSweepOnce()
+        await host.runLivenessSweepOnce()
+
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["existing"]?.processNotSeenCount, 0)
+    }
+
+    @MainActor
+    func testSuccessfulEmptyUnifiedScanReapsAfterTwoMisses() async {
+        let host = BridgeServerHost(
+            petController: PetController(surface: DiscoveryTestPetSurface()),
+            processScanProvider: { .success([]) },
+            livenessInterval: 60
+        )
+        host.applyForTesting(.sessionStarted(
+            sessionID: "existing",
+            timestamp: .now,
+            title: "Existing",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: nil
+        ))
+
+        await host.runLivenessSweepOnce()
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["existing"]?.processNotSeenCount, 1)
+        await host.runLivenessSweepOnce()
+
+        XCTAssertNil(host.sessionStateSnapshot.sessionsByID["existing"])
+    }
+
+    @MainActor
+    func testUnifiedSweepInvokesProcessProviderOnlyOnce() async {
+        let counter = DiscoveryInvocationCounter()
+        let host = BridgeServerHost(
+            petController: PetController(surface: DiscoveryTestPetSurface()),
+            processScanProvider: {
+                await counter.increment()
+                return .success([])
+            },
+            livenessInterval: 60
+        )
+
+        await host.runLivenessSweepOnce()
+
+        let invocationCount = await counter.value
+        XCTAssertEqual(invocationCount, 1)
+    }
+
+    @MainActor
+    func testDifferentNativeSessionOnSameTTYDoesNotKeepOldSessionAlive() async {
+        let newSession = ActiveAgentSession(
+            id: "discovered-codex-new-native",
+            title: "New",
+            tool: .codex,
+            summary: "Detected running Codex",
+            jumpTarget: JumpTarget(terminalApp: "Terminal", terminalTTY: "ttys001"),
+            nativeSessionID: "new-native",
+            transcriptPath: "/tmp/new-native.jsonl"
+        )
+        let host = BridgeServerHost(
+            petController: PetController(surface: DiscoveryTestPetSurface()),
+            processScanProvider: { .success([newSession]) },
+            livenessInterval: 60
+        )
+        host.applyForTesting(.sessionStarted(
+            sessionID: "old-native",
+            timestamp: .now,
+            title: "Old",
+            tool: .codex,
+            summary: "Started",
+            jumpTarget: JumpTarget(terminalApp: "Terminal", terminalTTY: "ttys001")
+        ))
+
+        await host.runLivenessSweepOnce()
+
+        XCTAssertEqual(host.sessionStateSnapshot.sessionsByID["old-native"]?.processNotSeenCount, 1)
+        XCTAssertNotNil(host.sessionStateSnapshot.sessionsByID[newSession.id])
+    }
+}
+
+private actor DiscoveryInvocationCounter {
+    private var count = 0
+
+    var value: Int { count }
+
+    func increment() {
+        count += 1
     }
 }
 

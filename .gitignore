@@ -31,6 +31,9 @@ playground.xcworkspace
 
 .build/
 
+# Local Git worktrees
+.worktrees/
+
 # Local release artifacts
 dist/
 
