@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (MAJOR.MINOR.PATCH)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish macOS release
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      PACKAGE_VERSION: ${{ inputs.version }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Build universal package
+        run: ./Scripts/package-release.sh "$PACKAGE_VERSION" "$RUNNER_TEMP/package"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${PACKAGE_VERSION}" \
+            "$RUNNER_TEMP/package/VibePet-v${PACKAGE_VERSION}-macos-universal.zip" \
+            "$RUNNER_TEMP/package/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "VibePet v${PACKAGE_VERSION}" \
+            --generate-notes \
+            --fail-on-no-commits
