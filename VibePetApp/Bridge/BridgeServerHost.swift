@@ -19,8 +19,10 @@ final class BridgeServerHost {
     private let petController: PetController
     private let socketPath: SocketPath
     private let manifestStore: InstallManifestStore
-    private let liveSessionProvider: @Sendable (SessionState) async -> Set<String>
-    private let activeSessionProvider: @Sendable () async -> [ActiveAgentSession]
+    private let processScanProvider: @Sendable () async -> ActiveAgentProcessScan
+    private let liveSessionProvider: (@Sendable (SessionState) async -> Set<String>)?
+    private let activeSessionProvider: (@Sendable () async -> [ActiveAgentSession])?
+    private let usesLegacyProcessProviders: Bool
     private let livenessInterval: TimeInterval
     private let terminalJumpResolver: TerminalJumpTargetResolver
     private let localizerProvider: @MainActor () -> AppLocalizer
@@ -47,15 +49,10 @@ final class BridgeServerHost {
         petController: PetController,
         socketPath: SocketPath = SocketPath(),
         manifestStore: InstallManifestStore? = nil,
-        liveSessionProvider: @escaping @Sendable (SessionState) async -> Set<String> = {
-            await AgentProcessLiveness.liveSessionIDs(in: $0)
-        },
-        activeSessionProvider: @escaping @Sendable () async -> [ActiveAgentSession] = {
-            await Task.detached(priority: .utility) {
-                ActiveAgentProcessDiscovery().discover()
-            }.value
-        },
-        livenessInterval: TimeInterval = 5,
+        processScanProvider: (@Sendable () async -> ActiveAgentProcessScan)? = nil,
+        liveSessionProvider: (@Sendable (SessionState) async -> Set<String>)? = nil,
+        activeSessionProvider: (@Sendable () async -> [ActiveAgentSession])? = nil,
+        livenessInterval: TimeInterval = 2,
         terminalJumpResolver: TerminalJumpTargetResolver = TerminalJumpTargetResolver(),
         localizerProvider: @escaping @MainActor () -> AppLocalizer = { AppLocalizer(language: .simplifiedChinese) },
         onSessionStateChange: @escaping @MainActor (SessionState) -> Void = { _ in }
@@ -64,8 +61,17 @@ final class BridgeServerHost {
         self.socketPath = socketPath
         self.manifestStore = manifestStore
             ?? InstallManifestStore(applicationSupportRoot: socketPath.applicationSupportRoot)
+        if let processScanProvider {
+            self.processScanProvider = processScanProvider
+        } else {
+            let discoveryCoordinator = SessionDiscoveryCoordinator()
+            self.processScanProvider = {
+                await discoveryCoordinator.scan()
+            }
+        }
         self.liveSessionProvider = liveSessionProvider
         self.activeSessionProvider = activeSessionProvider
+        self.usesLegacyProcessProviders = liveSessionProvider != nil || activeSessionProvider != nil
         self.livenessInterval = livenessInterval
         self.terminalJumpResolver = terminalJumpResolver
         self.localizerProvider = localizerProvider
@@ -280,12 +286,26 @@ extension BridgeServerHost {
 
     private func runLivenessSweepOnce(generation sweepGeneration: UInt64?) async {
         guard isCurrentLivenessSweep(generation: sweepGeneration) else { return }
-        let activeSessions = await activeSessionProvider()
-        guard isCurrentLivenessSweep(generation: sweepGeneration) else { return }
 
         let livenessInput = sessionState
         let observedSessionIDs = Set(livenessInput.sessionsByID.keys)
-        let liveSessionIDs = await liveSessionProvider(livenessInput)
+        let activeSessions: [ActiveAgentSession]
+        let liveSessionIDs: Set<String>
+
+        if usesLegacyProcessProviders {
+            activeSessions = await activeSessionProvider?() ?? []
+            guard isCurrentLivenessSweep(generation: sweepGeneration) else { return }
+            liveSessionIDs = await liveSessionProvider?(livenessInput) ?? []
+        } else {
+            switch await processScanProvider() {
+            case .failure:
+                // A failed snapshot is unknown, not evidence that every process exited.
+                return
+            case let .success(sessions):
+                activeSessions = sessions
+                liveSessionIDs = matchingLiveSessionIDs(in: livenessInput, snapshots: sessions)
+            }
+        }
         guard isCurrentLivenessSweep(generation: sweepGeneration) else { return }
 
         var previewState = sessionState
@@ -360,6 +380,57 @@ extension BridgeServerHost {
             discoveredAliveIDs.insert(activeSession.id)
         }
         return discoveredAliveIDs
+    }
+
+    private func matchingLiveSessionIDs(
+        in state: SessionState,
+        snapshots: [ActiveAgentSession]
+    ) -> Set<String> {
+        var alive = Set(state.sessionsByID.values.compactMap { session in
+            session.phase.requiresAttention ? session.id : nil
+        })
+
+        for session in state.sessionsByID.values where !session.isSessionEnded {
+            if snapshots.contains(where: { snapshot in
+                snapshot.id == session.id
+                    || snapshot.nativeSessionID?.lowercased() == session.id.lowercased()
+            }) {
+                alive.insert(session.id)
+            }
+        }
+
+        let fallbackCandidates = state.sessionsByID.values.filter {
+            !$0.isSessionEnded && !alive.contains($0.id)
+        }
+        for snapshot in snapshots
+        where snapshot.nativeSessionID == nil && snapshot.transcriptPath == nil {
+            // Heuristic attachment is allowed only when it identifies exactly one
+            // tracked session. A different native session on the same TTY must
+            // never keep an old session alive.
+            let ttyMatches = fallbackCandidates.filter { session in
+                session.tool == snapshot.tool
+                    && Self.exactTTYMatch(snapshot.jumpTarget, session.jumpTarget)
+            }
+            if ttyMatches.count == 1 {
+                alive.insert(ttyMatches[0].id)
+                continue
+            }
+            guard ttyMatches.isEmpty,
+                  let cwd = snapshot.jumpTarget?.workingDirectory else {
+                continue
+            }
+            let normalizedCWD = ActiveAgentProcessDiscovery.normalizedWorkingDirectory(cwd)
+            let cwdMatches = fallbackCandidates.filter { session in
+                session.tool == snapshot.tool
+                    && session.jumpTarget?.workingDirectory.map(
+                        ActiveAgentProcessDiscovery.normalizedWorkingDirectory
+                    ) == normalizedCWD
+            }
+            if cwdMatches.count == 1 {
+                alive.insert(cwdMatches[0].id)
+            }
+        }
+        return alive
     }
 
     private func startLivenessSweep(generation sweepGeneration: UInt64) {
@@ -643,6 +714,16 @@ extension BridgeServerHost {
         for activeSession: ActiveAgentSession,
         in state: SessionState
     ) -> AgentSession? {
+        if let nativeSessionID = activeSession.nativeSessionID {
+            let exactMatches = state.sessionsByID.values.filter {
+                !Self.isDiscoveredSessionID($0.id)
+                    && $0.tool == activeSession.tool
+                    && $0.id.lowercased() == nativeSessionID.lowercased()
+            }
+            if exactMatches.count == 1 { return exactMatches[0] }
+            return nil
+        }
+        guard activeSession.transcriptPath == nil else { return nil }
         let matches = state.sessionsByID.values.filter { session in
             !Self.isDiscoveredSessionID(session.id)
                 && session.tool == activeSession.tool
@@ -652,10 +733,15 @@ extension BridgeServerHost {
     }
 
     private func matchingDiscoveredSession(for event: AgentEvent, source: SourceInfo?) -> AgentSession? {
+        let tool = eventTool(event, source: source)
+        let exactID = "discovered-\(tool.rawValue)-\(event.sessionID.lowercased())"
+        if let exact = sessionState.sessionsByID[exactID] {
+            return exact
+        }
         let eventJumpTarget = source?.jumpTarget ?? eventJumpTarget(event)
         let matches = sessionState.sessionsByID.values.filter { session in
-            Self.isDiscoveredSessionID(session.id)
-                && session.tool == eventTool(event, source: source)
+            Self.isFallbackDiscoveredSessionID(session.id)
+                && session.tool == tool
                 && Self.jumpTargetsMatch(session.jumpTarget, eventJumpTarget)
         }
         return matches.count == 1 ? matches[0] : nil
@@ -682,19 +768,27 @@ extension BridgeServerHost {
         id.hasPrefix("discovered-")
     }
 
-    private static func jumpTargetsMatch(_ lhs: JumpTarget?, _ rhs: JumpTarget?) -> Bool {
-        guard let lhs, let rhs else {
+    private static func exactTTYMatch(_ lhs: JumpTarget?, _ rhs: JumpTarget?) -> Bool {
+        guard let lhsTTY = lhs?.terminalTTY.flatMap(normalizedTerminalTTY),
+              let rhsTTY = rhs?.terminalTTY.flatMap(normalizedTerminalTTY) else {
             return false
         }
-        if let lhsTTY = lhs.terminalTTY.flatMap(normalizedTerminalTTY),
-           let rhsTTY = rhs.terminalTTY.flatMap(normalizedTerminalTTY) {
-            return lhsTTY == rhsTTY
+        return lhsTTY == rhsTTY
+    }
+
+    private static func jumpTargetsMatch(_ lhs: JumpTarget?, _ rhs: JumpTarget?) -> Bool {
+        if exactTTYMatch(lhs, rhs) { return true }
+        guard let lhsDirectory = lhs?.workingDirectory,
+              let rhsDirectory = rhs?.workingDirectory else {
+            return false
         }
-        if let lhsDirectory = lhs.workingDirectory,
-           let rhsDirectory = rhs.workingDirectory {
-            return lhsDirectory == rhsDirectory
-        }
-        return false
+        return lhsDirectory == rhsDirectory
+    }
+
+    private static func isFallbackDiscoveredSessionID(_ sessionID: String) -> Bool {
+        guard isDiscoveredSessionID(sessionID) else { return false }
+        if sessionID.contains("-synthetic-") { return true }
+        return sessionID.split(separator: "-").last?.allSatisfy(\.isNumber) == true
     }
 
     private static func normalizedTerminalTTY(_ tty: String) -> String? {
@@ -729,7 +823,6 @@ enum AgentProcessLiveness {
                 continue
             }
             guard let tty = session.jumpTarget?.terminalTTY, !tty.isEmpty else {
-                alive.insert(session.id)
                 continue
             }
 
@@ -745,38 +838,16 @@ enum AgentProcessLiveness {
     }
 
     private static func runningProcessRows() -> [ProcessRow] {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "tty=,command="]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            let exitGroup = DispatchGroup()
-            exitGroup.enter()
-            process.terminationHandler = { _ in
-                exitGroup.leave()
-            }
-            try process.run()
-            guard exitGroup.wait(timeout: .now() + 1) == .success else {
-                process.terminate()
-                return []
-            }
-            guard process.terminationStatus == 0 else {
-                return []
-            }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8) else {
-                return []
-            }
-            return output.split(separator: "\n").compactMap { line in
-                let parts = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
-                guard parts.count == 2 else { return nil }
-                return ProcessRow(tty: String(parts[0]), command: String(parts[1]))
-            }
-        } catch {
+        guard let output = ActiveAgentProcessDiscovery.commandOutput(
+            executablePath: "/bin/ps",
+            arguments: ["-axo", "tty=,command="]
+        ) else {
             return []
+        }
+        return output.split(separator: "\n").compactMap { line in
+            let parts = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+            guard parts.count == 2 else { return nil }
+            return ProcessRow(tty: String(parts[0]), command: String(parts[1]))
         }
     }
 
